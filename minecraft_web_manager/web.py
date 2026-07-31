@@ -4,19 +4,64 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import mimetypes
 import threading
+import zipfile
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel, Field
 
 from .auth import issue_token, verify_token
 from .config import CONSOLE_BUFFER_SIZE, TOKEN_TTL_SECONDS
 from .metrics import RANGES
+
+# Explicit rather than left to mimetypes: the OS mapping varies by platform and the
+# charset matters (every page and script contains Chinese text).
+_MEDIA_TYPES = {
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".json": "application/json; charset=utf-8",
+}
+
+
+def load_assets() -> dict[str, tuple[bytes, str]]:
+    """Read the bundled static/ files into memory as {filename: (bytes, media type)}.
+
+    A packed plugin (``.mcdr``) is a zip that MCDR imports with zipimport, so
+    ``static/`` has no real filesystem path there and Starlette's StaticFiles /
+    FileResponse cannot serve from it. Reading the bytes once at load time works for
+    both the unpacked folder and the packed archive; the whole bundle is well under
+    a megabyte.
+    """
+    static_directory = Path(__file__).parent / "static"
+    if static_directory.is_dir():
+        return {
+            path.name: (path.read_bytes(), _media_type(path.name))
+            for path in sorted(static_directory.iterdir())
+            if path.is_file()
+        }
+
+    archive = getattr(__loader__, "archive", None)  # set by zipimport for packed plugins
+    if archive is None:
+        raise RuntimeError(f"Cannot locate the bundled static files at {static_directory}")
+    prefix = f"{__package__}/static/"
+    with zipfile.ZipFile(archive) as bundle:
+        return {
+            name[len(prefix):]: (bundle.read(name), _media_type(name))
+            for name in bundle.namelist()
+            if name.startswith(prefix) and not name.endswith("/")
+        }
+
+
+def _media_type(name: str) -> str:
+    suffix = Path(name).suffix.lower()
+    return _MEDIA_TYPES.get(suffix) or mimetypes.guess_type(name)[0] or "application/octet-stream"
 
 
 class LoginRequest(BaseModel):
@@ -99,10 +144,10 @@ class EventHub:
 
 
 class WebService:
-    def __init__(self, bridge, config, static_dir: Path, logger, history=None) -> None:
+    def __init__(self, bridge, config, logger, history=None) -> None:
         self.bridge = bridge
         self.config = config
-        self.static_dir = static_dir
+        self.assets = load_assets()
         self.logger = logger
         self.history = history
         self.hub = EventHub(CONSOLE_BUFFER_SIZE)
@@ -154,7 +199,16 @@ class WebService:
 
     def _build_app(self) -> FastAPI:
         app = FastAPI(title="Minecraft Web Manager", version="0.1.0", docs_url="/api/docs", redoc_url=None)
-        app.mount("/assets", StaticFiles(directory=self.static_dir), name="assets")
+
+        @app.get("/assets/{filename}", include_in_schema=False)
+        async def asset(filename: str) -> Response:
+            # A path parameter never spans "/", and this is a plain dict lookup, so
+            # there is nothing here for a traversal attempt to reach.
+            found = self.assets.get(filename)
+            if found is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            content, media_type = found
+            return Response(content, media_type=media_type)
 
         @app.on_event("startup")
         async def app_started() -> None:
@@ -169,12 +223,12 @@ class WebService:
             return self._claims_from_token(token)
 
         @app.get("/", include_in_schema=False)
-        async def login_page() -> FileResponse:
-            return FileResponse(self.static_dir / "login.html")
+        async def login_page() -> HTMLResponse:
+            return HTMLResponse(self.assets["login.html"][0])
 
         @app.get("/console", include_in_schema=False)
-        async def console_page() -> FileResponse:
-            return FileResponse(self.static_dir / "console.html")
+        async def console_page() -> HTMLResponse:
+            return HTMLResponse(self.assets["console.html"][0])
 
         @app.post("/api/auth/login")
         async def login(body: LoginRequest) -> dict[str, Any]:

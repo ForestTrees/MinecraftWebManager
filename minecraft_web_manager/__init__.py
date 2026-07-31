@@ -49,7 +49,7 @@ def on_load(server, prev_module) -> None:
     bridge = MCDRBridge(server, _players)
     _history = MetricsHistory(bridge.sample, server.logger)
     _history.start()
-    _service = WebService(bridge, config, Path(__file__).parent / "static", server.logger, _history)
+    _service = WebService(bridge, config, server.logger, _history)
     _service.start()
     server.logger.info("Minecraft Web Manager is listening on http://%s:%s", config.data["host"], config.data["port"])
     _seed_online_players(server)
