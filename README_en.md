@@ -7,7 +7,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serve
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
 - **Version**: 0.1.0
-- **Requires**: MCDReforged `>=2.15.0`, Python 3.9+
+- **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `psutil`
 
 > Note: the dashboard UI is currently available in Chinese only.
@@ -76,7 +76,7 @@ Alternatively, zip `mcdreforged.plugin.json` together with `minecraft_web_manage
 pip install -r requirements.txt
 ```
 
-Make sure you are using the same Python environment that runs MCDR.
+Make sure you are using the same Python environment that runs MCDR — activate its virtualenv first if it has one.
 
 ### 3. Load the plugin
 

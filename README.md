@@ -7,7 +7,7 @@
 面板由插件自身托管，无需另外部署 Web 服务器，也不依赖任何 CDN 或前端构建工具。
 
 - **版本**：0.1.0
-- **依赖**：MCDReforged `>=2.15.0`、Python 3.9+
+- **依赖**：MCDReforged `>=2.15.0`、Python 3.10+
 - **Python 库**：`fastapi`、`uvicorn[standard]`、`psutil`
 
 ---
@@ -74,7 +74,7 @@ MCDR 根目录/
 pip install -r requirements.txt
 ```
 
-请确保使用的是运行 MCDR 的那个 Python 环境。
+请确保使用的是运行 MCDR 的那个 Python 环境。若 MCDR 装在虚拟环境里，先激活它再执行上面的命令。
 
 ### 3. 加载插件
 
