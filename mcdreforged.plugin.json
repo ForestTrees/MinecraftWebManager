@@ -1,0 +1,11 @@
+{
+  "id": "minecraft_web_manager",
+  "version": "0.1.0",
+  "name": "Minecraft Web Manager",
+  "description": "A secure web dashboard and live console for an MCDReforged-managed Minecraft server.",
+  "author": "ForestTrees",
+  "entrypoint": "minecraft_web_manager",
+  "dependencies": {
+    "mcdreforged": ">=2.15.0"
+  }
+}

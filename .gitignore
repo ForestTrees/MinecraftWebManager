@@ -1,0 +1,7 @@
+# 个人待办笔记与 AI 协作指引，不属于插件发布内容
+TODO.md
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
