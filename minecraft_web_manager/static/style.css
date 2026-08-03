@@ -304,8 +304,7 @@ input.field:focus, select.field:focus {
 .tag.op { background: var(--warn-soft); color: var(--warn); }
 .tag.danger { background: var(--danger-soft); color: var(--danger); }
 .tag.bot { background: var(--surface-3); color: var(--text-muted); border: 1px dashed var(--border-strong); }
-.bot-toggle-row td { background: var(--surface-2); padding: .45rem .8rem; }
-.bot-toggle-button { font-weight: 650; }
+.bot-section { margin-top: 1.1rem; }
 .player-name { font-weight: 650; }
 .row-actions { display: flex; gap: .5rem; flex-wrap: wrap; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); font-size: .8rem; font-weight: 600; }

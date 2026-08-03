@@ -23,6 +23,9 @@ README_LINES = [
     "token_secret 是登录令牌的签名密钥，由插件自动生成；清空它会让所有已登录会话立即失效。",
     "token_ttl_seconds 是登录会话有效期（秒），默认 2592000（30 天）；活跃使用时会自动续期。",
     "bot_names 是手动标记为假人（Carpet bot）的玩家名列表（小写）；自动识别之外的手动兜底，可留空。",
+    "bot_name_patterns 是额外的假人名称正则列表（默认匹配 Bot_/bot- 等前缀）；默认只对不在 usercache 中的玩家生效，避免误伤同名真玩家。",
+    "bot_name_patterns_apply_to_all 设为 true 时名称规则对所有玩家生效（若你的假人也写入了 usercache）；同名真玩家请加入 not_bot_names。",
+    "not_bot_names 是反向名单：即使匹配了名称规则或离线 UUID，也强制视为真人（小写）；误判时点行内「取消标记」会自动写入。",
     "host/port 是网页面板的监听地址，默认仅本机可访问；修改后需重载插件。",
     "RCON 不在这里配置：Minecraft 端在 server/server.properties，MCDR 端在 config.yml，两边的端口和密码必须一致。",
 ]
@@ -41,6 +44,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "token_secret": "",
     "token_ttl_seconds": DEFAULT_TOKEN_TTL_SECONDS,
     "bot_names": [],
+    "not_bot_names": [],
+    "bot_name_patterns": ["(?i)^bot[_-]"],
+    "bot_name_patterns_apply_to_all": False,
 }
 
 

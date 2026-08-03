@@ -497,18 +497,36 @@ class MCDRBridge:
         return str(value).replace("-", "").lower()
 
     def _classify_bot(
-        self, player: dict[str, Any], online_mode: bool, manual_bots: set[str]
+        self,
+        player: dict[str, Any],
+        online_mode: bool,
+        manual_bots: set[str],
+        not_bots: set[str],
+        bot_patterns: list[re.Pattern],
+        patterns_apply_to_all: bool,
     ) -> tuple[bool, str | None]:
-        """Return (is_bot, source) where source is "manual" or "auto".
+        """Return (is_bot, source) where source is "manual" / "pattern" / "auto".
 
-        Manual list always wins. Otherwise: on online-mode servers the offline-UUID
-        match alone is decisive (real players have Mojang-signed UUIDs). On offline
-        servers real players share the offline-UUID scheme, so the auxiliary signals
-        are required: never seen in usercache and no captured IP login line.
+        Priority: the not_bot_names override wins over everything, then the manual
+        bot_names list, then the configured name patterns, then the offline-UUID
+        check. Pattern rules only apply to players with no usercache record, because
+        real accounts that ever joined are always in usercache — that is what keeps a
+        genuine player named "bot_XXX" from being misclassified. Several popular
+        Carpet extensions (TIS, AMS, RMS, ...) give fake players Mojang-resolved or
+        random v4 UUIDs instead of the classic offline UUID, so UUID matching alone
+        misses them. On offline-mode servers the offline-UUID check additionally
+        requires never being seen in usercache and having no captured IP login line.
         """
         name = (player.get("name") or "").lower()
+        if name in not_bots:
+            return False, None
         if name in manual_bots:
             return True, "manual"
+        player_name = player.get("name") or ""
+        if any(pattern.search(player_name) for pattern in bot_patterns) and (
+            patterns_apply_to_all or not player.get("in_usercache")
+        ):
+            return True, "pattern"
         player_uuid = player.get("uuid")
         if not name or not player_uuid:
             return False, None
@@ -527,20 +545,29 @@ class MCDRBridge:
         return True, "auto"
 
     def set_bot_flag(self, name: str, is_bot: bool) -> dict[str, Any]:
-        """Add/remove a manual bot mark, persisted into config bot_names."""
+        """Force a player into or out of the bot list, persisted to the config.
+
+        Marking adds the name to bot_names; unmarking adds it to not_bot_names so
+        name rules or UUID heuristics can never re-flag the same account.
+        """
         if not _PLAYER_NAME_PATTERN.match(name or ""):
             raise ValueError(f"Invalid player name: {name!r}")
         if self.config is None:
             raise RuntimeError("Bot flagging requires the plugin config")
         key = name.lower()
         with self.config.lock:
-            bot_names = list(self.config.data.get("bot_names") or [])
+            bot_names = [str(entry) for entry in (self.config.data.get("bot_names") or [])]
+            not_bot_names = [str(entry) for entry in (self.config.data.get("not_bot_names") or [])]
             if is_bot:
                 if key not in bot_names:
                     bot_names.append(key)
+                not_bot_names = [entry for entry in not_bot_names if entry != key]
             else:
+                if key not in not_bot_names:
+                    not_bot_names.append(key)
                 bot_names = [entry for entry in bot_names if entry != key]
             self.config.data["bot_names"] = bot_names
+            self.config.data["not_bot_names"] = not_bot_names
             self.config.save()
         return {"name": name, "is_bot": is_bot}
 
@@ -555,6 +582,15 @@ class MCDRBridge:
         data["whitelist_enforced"] = settings.get("enforce-whitelist") == "true"
         online_mode = settings.get("online-mode") == "true"
         manual_bots = {str(entry).lower() for entry in (self.config.data.get("bot_names") or [])} if self.config else set()
+        not_bots = {str(entry).lower() for entry in (self.config.data.get("not_bot_names") or [])} if self.config else set()
+        bot_patterns: list[re.Pattern] = []
+        if self.config:
+            for pattern in (self.config.data.get("bot_name_patterns") or []):
+                try:
+                    bot_patterns.append(re.compile(str(pattern)))
+                except re.error:
+                    pass  # a malformed regex in the config is ignored, not fatal
+        patterns_apply_to_all = bool(self.config.data.get("bot_name_patterns_apply_to_all", False)) if self.config else False
         online = {entry["name"].lower(): entry for entry in self.players_detail() if entry.get("name")}
 
         for player in data["players"]:
@@ -570,7 +606,9 @@ class MCDRBridge:
                     "position": (live or {}).get("position"),
                 }
             )
-            player["is_bot"], player["bot_source"] = self._classify_bot(player, online_mode, manual_bots)
+            player["is_bot"], player["bot_source"] = self._classify_bot(
+                player, online_mode, manual_bots, not_bots, bot_patterns, patterns_apply_to_all
+            )
         # Anyone online but absent from every registry file (e.g. usercache not flushed yet)
         # still belongs in the roster rather than silently disappearing.
         for live in online.values():
@@ -592,7 +630,9 @@ class MCDRBridge:
                 "dimension": live.get("dimension"),
                 "position": live.get("position"),
             }
-            player["is_bot"], player["bot_source"] = self._classify_bot(player, online_mode, manual_bots)
+            player["is_bot"], player["bot_source"] = self._classify_bot(
+                player, online_mode, manual_bots, not_bots, bot_patterns, patterns_apply_to_all
+            )
             data["players"].append(player)
         return data
 

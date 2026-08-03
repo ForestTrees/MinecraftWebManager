@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Minecraft Web Manager · 控制台</title>
-    <link rel="stylesheet" href="/assets/style.css?v=10" />
-    <script src="/assets/theme.js?v=10"></script>
+    <link rel="stylesheet" href="/assets/style.css?v=11" />
+    <script src="/assets/theme.js?v=11"></script>
   </head>
   <body>
     <div class="app">
@@ -133,13 +133,25 @@
 
               <div class="subview active" data-subview="roster">
                 <p class="hint">包含所有进入过本服的玩家；在线与 OP 置顶。坐标 / 维度需 RCON，Ping 在 vanilla 下不可用。Carpet 假人自动识别并以折叠分组展示。</p>
+                <h3 class="section-title">玩家</h3>
                 <div class="table-scroll">
                   <table class="data-table">
                     <thead>
                       <tr><th>玩家</th><th>状态</th><th>标记</th><th>IP</th><th>在线时长</th><th>最后在线</th><th>维度</th><th>坐标</th><th>UUID</th><th>操作</th></tr>
                     </thead>
                     <tbody id="players-table-body"><tr><td colspan="10">正在读取…</td></tr></tbody>
-                    <tbody id="players-bots-body" hidden></tbody>
+                  </table>
+                </div>
+                <h3 class="section-title bot-section" id="bots-section-head" hidden>
+                  <button type="button" id="bots-toggle" class="link-btn"><span class="tag bot">假人</span> 共 <span id="bots-count">0</span> 个 <span id="bots-chevron">▸</span></button>
+                  <span class="na" id="bots-toggle-hint">点击展开</span>
+                </h3>
+                <div class="table-scroll" id="bots-table-scroll" hidden>
+                  <table class="data-table">
+                    <thead>
+                      <tr><th>玩家</th><th>状态</th><th>标记</th><th>IP</th><th>在线时长</th><th>最后在线</th><th>维度</th><th>坐标</th><th>UUID</th><th>操作</th></tr>
+                    </thead>
+                    <tbody id="players-bots-body"></tbody>
                   </table>
                 </div>
               </div>
@@ -280,7 +292,7 @@
       </div>
     </div>
 
-    <script src="/assets/chart.js?v=10"></script>
-    <script src="/assets/console.js?v=10"></script>
+    <script src="/assets/chart.js?v=11"></script>
+    <script src="/assets/console.js?v=11"></script>
   </body>
 </html>

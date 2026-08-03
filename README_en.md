@@ -6,7 +6,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serve
 
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
-- **Version**: 0.1.0
+- **Version**: 0.1.1
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `psutil`
 
@@ -27,7 +27,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### Player management
 
-- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Carpet fake players (bots) are detected automatically and shown in a collapsible group, and can also be flagged manually per row
+- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Detected Carpet fake players (bots) live in a separate "Bot management" table inside the same tab, collapsible and manually flaggable per row
 - Per-player actions: op / deop, kick, ban, ban IP, add to / remove from whitelist
 - **Whitelist**: toggle enforcement, reload the list, add and remove entries
 - **Operators**: view, grant and revoke OP
@@ -117,6 +117,9 @@ The config file lives at `config/minecraft_web_manager/config.json` inside MCDR'
 | `token_secret` | generated | Signing key for login tokens. Clearing it invalidates every active session immediately |
 | `token_ttl_seconds` | `2592000` (30 days) | Login session lifetime in seconds; sessions slide forward while actively used |
 | `bot_names` | `[]` | Player names manually flagged as fake players (lowercase); manual fallback on top of auto-detection |
+| `not_bot_names` | `[]` | Reverse list (lowercase): forced to be treated as real players even if name rules or the offline UUID match; the per-row "unmark" button writes here |
+| `bot_name_patterns` | `["(?i)^bot[_-]"]` | Regex list for bot-like names; by default only applies to players **absent from usercache**, so a real player named `bot_XXX` is not misclassified |
+| `bot_name_patterns_apply_to_all` | `false` | Set to `true` to apply name rules to every player (for servers whose fake players do land in usercache); real players with matching names belong in `not_bot_names` |
 
 After login the browser receives an **HttpOnly + SameSite=Strict session cookie** (invisible to page scripts and never sent on cross-site requests), valid for 30 days by default. Active use keeps sliding the expiry forward, so normal usage does not require repeated logins. The "log out" button ends the session immediately; clearing `token_secret` also invalidates every session at once.
 
@@ -178,7 +181,7 @@ The dashboard has full control over your server — arbitrary commands, bans, co
 - **World seed, name and difficulty are read from save files**, which only update when the server writes them to disk — they can lag reality by minutes
 - **Player IPs and UUIDs are parsed from server output**, so unusual log formats may prevent capture. Players recovered after a plugin reload have no join time or IP
 - **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only
-- **Bot detection**: precise on online-mode servers (Carpet bots always use the offline-mode UUID). On offline-mode servers real players share the offline UUID scheme, so usercache / IP signals are combined — edge cases (e.g. `log-ips` disabled, cleared usercache) may misclassify, and `bot_names` is the manual fix
+- **Bot detection**: classic Carpet bots are matched by their offline UUID. TIS/AMS/RMS-style extensions may give bots Mojang-resolved or random v4 UUIDs, which only name rules + usercache signals can catch. Name rules only apply to players with no usercache record; use `not_bot_names` or the per-row "unmark" action to force a real-player classification
 - **Ping is unavailable on vanilla servers** and therefore not shown
 - The dashboard UI is currently Chinese-only
 

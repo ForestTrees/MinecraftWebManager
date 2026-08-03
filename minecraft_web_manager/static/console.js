@@ -375,7 +375,7 @@ function rosterActionsHtml(player, isBot = false) {
   buttons.push(`<button class="link-btn danger" data-player-action="ban_ip" data-target="${escapeHtml(player.ip || player.name)}">封 IP</button>`);
   if (!isBot) {
     buttons.push(`<button class="link-btn" data-bot-flag="1" data-target="${name}">标记为假人</button>`);
-  } else if (player.bot_source === 'manual') {
+  } else {
     buttons.push(`<button class="link-btn" data-bot-flag="0" data-target="${name}">取消标记</button>`);
   }
   return `<div class="row-actions">${buttons.join('')}</div>`;
@@ -383,7 +383,10 @@ function rosterActionsHtml(player, isBot = false) {
 
 function rosterRowHtml(p, isBot) {
   const marks = [];
-  if (p.is_bot) marks.push(`<span class="tag bot" title="${p.bot_source === 'manual' ? '手动标记' : '自动识别'}">假人</span>`);
+  if (p.is_bot) {
+    const sourceHint = p.bot_source === 'manual' ? '手动标记' : (p.bot_source === 'pattern' ? '名称规则' : 'UUID 识别');
+    marks.push(`<span class="tag bot" title="${sourceHint}">假人</span>`);
+  }
   if (p.whitelisted) marks.push('<span class="tag muted">白名单</span>');
   if (p.banned) marks.push(`<span class="tag danger" title="${escapeHtml(p.ban_reason || '')}">已封禁</span>`);
   if (!p.has_played) marks.push('<span class="tag muted">未进入过</span>');
@@ -408,27 +411,28 @@ function rosterRowHtml(p, isBot) {
 function renderRoster(players) {
   const bots = players.filter((p) => p.is_bot);
   const humans = players.filter((p) => !p.is_bot);
+  const emptyRow = '<tr><td colspan="10">暂无玩家记录</td></tr>';
   if (!players.length) {
-    $('players-table-body').innerHTML = '<tr><td colspan="10">暂无玩家记录</td></tr>';
+    $('players-table-body').innerHTML = emptyRow;
+    $('bots-section-head').hidden = true;
+    $('bots-table-scroll').hidden = true;
     $('players-bots-body').innerHTML = '';
-    $('players-bots-body').hidden = true;
     return;
   }
-  const toggleRow = bots.length
-    ? `<tr class="bot-toggle-row" data-bot-toggle>
-        <td colspan="10">
-          <button type="button" class="link-btn bot-toggle-button"><span class="tag bot">假人</span> 共 ${bots.length} 个 <span class="bot-chevron">${state.botsExpanded ? '▾' : '▸'}</span></button>
-          <span class="na">${state.botsExpanded ? '点击收起' : '点击展开'}</span>
-        </td>
-      </tr>`
-    : '';
-  $('players-table-body').innerHTML = sortRoster(humans).map((p) => rosterRowHtml(p, false)).join('') + toggleRow;
+  $('players-table-body').innerHTML = humans.length
+    ? sortRoster(humans).map((p) => rosterRowHtml(p, false)).join('')
+    : emptyRow;
   if (bots.length) {
+    $('bots-section-head').hidden = false;
+    $('bots-count').textContent = bots.length;
     $('players-bots-body').innerHTML = sortRoster(bots).map((p) => rosterRowHtml(p, true)).join('');
-    $('players-bots-body').hidden = !state.botsExpanded;
+    $('bots-table-scroll').hidden = !state.botsExpanded;
+    $('bots-chevron').textContent = state.botsExpanded ? '▾' : '▸';
+    $('bots-toggle-hint').textContent = state.botsExpanded ? '点击收起' : '点击展开';
   } else {
+    $('bots-section-head').hidden = true;
+    $('bots-table-scroll').hidden = true;
     $('players-bots-body').innerHTML = '';
-    $('players-bots-body').hidden = true;
   }
 }
 
@@ -440,8 +444,9 @@ async function refreshRoster() {
     renderAccess(data);
   } catch (error) {
     $('players-table-body').innerHTML = `<tr><td colspan="10">读取失败：${escapeHtml(error.message)}</td></tr>`;
+    $('bots-section-head').hidden = true;
+    $('bots-table-scroll').hidden = true;
     $('players-bots-body').innerHTML = '';
-    $('players-bots-body').hidden = true;
   }
 }
 
@@ -491,14 +496,11 @@ document.addEventListener('click', (event) => {
   performPlayerAction(button.dataset.playerAction, button.dataset.target || null, button.dataset.reason || null);
 });
 document.addEventListener('click', (event) => {
-  const toggle = event.target.closest('[data-bot-toggle]');
-  if (toggle) {
+  if (event.target.closest('#bots-toggle')) {
     state.botsExpanded = !state.botsExpanded;
-    $('players-bots-body').hidden = !state.botsExpanded;
-    const chevron = toggle.querySelector('.bot-chevron');
-    if (chevron) chevron.textContent = state.botsExpanded ? '▾' : '▸';
-    const hint = toggle.querySelector('.na');
-    if (hint) hint.textContent = state.botsExpanded ? '点击收起' : '点击展开';
+    $('bots-table-scroll').hidden = !state.botsExpanded;
+    $('bots-chevron').textContent = state.botsExpanded ? '▾' : '▸';
+    $('bots-toggle-hint').textContent = state.botsExpanded ? '点击收起' : '点击展开';
   }
   const flagButton = event.target.closest('[data-bot-flag]');
   if (flagButton) setBotFlag(flagButton.dataset.target || '', flagButton.dataset.botFlag === '1');
@@ -506,7 +508,7 @@ document.addEventListener('click', (event) => {
 async function setBotFlag(target, isBot) {
   const verb = isBot ? '标记为假人' : '取消假人标记';
   const confirmed = await confirmDialog(
-    `确认要${verb}「${target}」吗？${isBot ? '该玩家将在列表中按假人折叠展示。' : ''}`,
+    `确认要${verb}「${target}」吗？${isBot ? '该玩家将移入假人管理表格。' : '该玩家将永久按真人处理，名称规则不再对其生效。'}`,
     { title: verb, confirmText: verb }
   );
   if (!confirmed) return;
