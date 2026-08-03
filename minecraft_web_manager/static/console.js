@@ -1,4 +1,4 @@
-const state = { token: sessionStorage.getItem('mwm_token'), socket: null, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, roster: null };
+const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null };
 const $ = (id) => document.getElementById(id);
 
 const VIEW_TITLES = { console: '实时控制台', players: '玩家管理', world: 'World', performance: '服务器状态' };
@@ -68,12 +68,8 @@ const actionButtons = {
   stop: document.querySelector('[data-action="stop"]'),
 };
 
-if (!state.token) {
-  location.href = '/';
-}
-
 async function api(path, options = {}) {
-  const headers = { ...(options.headers || {}), Authorization: `Bearer ${state.token}` };
+  const headers = { ...(options.headers || {}) };
   if (options.body) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
   if (response.status === 401) return logout();
@@ -135,13 +131,21 @@ function formatMinecraftText(text) {
 
 const consoleLines = [];
 const CONSOLE_MAX_LINES = 2000;
+let consoleRenderScheduled = false;
 function appendConsole(data) {
   const consoleEl = $('console');
   const line = data.raw || data.content || '';
   consoleLines.push(formatMinecraftText(line));
   if (consoleLines.length > CONSOLE_MAX_LINES) consoleLines.splice(0, consoleLines.length - CONSOLE_MAX_LINES);
-  consoleEl.innerHTML = consoleLines.join('\n');
-  consoleEl.scrollTop = consoleEl.scrollHeight;
+  // Re-render the whole backlog on every line is wasteful during chat floods; batch
+  // the writes into the next animation frame instead.
+  if (consoleRenderScheduled) return;
+  consoleRenderScheduled = true;
+  requestAnimationFrame(() => {
+    consoleRenderScheduled = false;
+    consoleEl.innerHTML = consoleLines.join('\n');
+    consoleEl.scrollTop = consoleEl.scrollHeight;
+  });
 }
 
 /* ---------- toast + confirm modal ---------- */
@@ -239,7 +243,7 @@ function updatePerformanceTab(data) {
 }
 
 /* ---------- resource charts ---------- */
-const RANGE_SPANS = { '1h': 3600, '6h': 6 * 3600, '12h': 12 * 3600, '1d': 86400, '3d': 3 * 86400, '7d': 7 * 86400 };
+const RANGE_SPANS = { '10m': 600, '30m': 1800, '1h': 3600, '6h': 6 * 3600, '12h': 12 * 3600, '1d': 86400, '3d': 3 * 86400, '7d': 7 * 86400 };
 const CHART_POINTS = 300;
 
 function formatRate(value) { return `${formatBytes(value)}/s`; }
@@ -402,7 +406,6 @@ function renderRoster(players) {
 async function refreshRoster() {
   try {
     const data = await api('/api/players/roster');
-    state.roster = data;
     renderRoster(data.players || []);
     renderAccess(data);
   } catch (error) {
@@ -586,14 +589,21 @@ async function refreshProperties() {
 /* ---------- plugins + mods ---------- */
 function renderPlugins(plugins) {
   $('plugins-count').textContent = `${plugins.length} 个`;
-  $('plugins').innerHTML = plugins.map((p) => `
+  $('plugins').innerHTML = plugins.map((p) => {
+    // Reloading this very plugin would stop the web server mid-request; that flow
+    // only works from the MCDR console.
+    const reloadButton = p.self
+      ? '<span class="na">当前插件</span>'
+      : `<button class="link-btn row-hover-action" data-reload-plugin="${escapeHtml(p.id)}" type="button">重新加载</button>`;
+    return `
     <li class="entry-row">
       <div>
         <div class="p-name">${escapeHtml(p.name || p.id)}</div>
         <div class="p-meta">${escapeHtml(p.id)} · ${escapeHtml(p.version || 'unknown')}</div>
       </div>
-      <button class="link-btn row-hover-action" data-reload-plugin="${escapeHtml(p.id)}" type="button">重新加载</button>
-    </li>`).join('') || '<li>无已加载插件</li>';
+      ${reloadButton}
+    </li>`;
+  }).join('') || '<li>无已加载插件</li>';
 }
 
 async function refreshMods() {
@@ -664,7 +674,8 @@ function setConnection(text, cls) {
 }
 function connectSocket() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  state.socket = new WebSocket(`${protocol}://${location.host}/ws/events?token=${encodeURIComponent(state.token)}`);
+  // The session cookie is sent automatically on the same-origin handshake.
+  state.socket = new WebSocket(`${protocol}://${location.host}/ws/events`);
   state.socket.onopen = () => {
     setConnection('实时已连接', 'live');
     // The server replays its console backlog on every (re)connect; reset first so a
@@ -672,7 +683,10 @@ function connectSocket() {
     consoleLines.length = 0;
     $('console').textContent = '';
   };
-  state.socket.onclose = () => { setConnection('实时已断开', 'down'); if (state.token) setTimeout(connectSocket, 2000); };
+  state.socket.onclose = () => {
+    setConnection('实时已断开', 'down');
+    if (!state.loggedOut) setTimeout(connectSocket, 2000);
+  };
   state.socket.onmessage = (message) => {
     const event = JSON.parse(message.data);
     if (event.type === 'console') appendConsole(event.data);
@@ -682,7 +696,12 @@ function connectSocket() {
     }
   };
 }
-function logout() { sessionStorage.removeItem('mwm_token'); state.token = null; state.socket?.close(); location.href = '/'; }
+async function logout() {
+  state.loggedOut = true;
+  state.socket?.close();
+  try { await fetch('/api/auth/logout', { method: 'POST' }); } catch { /* session may already be gone */ }
+  location.href = '/';
+}
 $('logout').addEventListener('click', logout);
 
 /* ---------- command suggestions (only after typing; never steal history keys) ---------- */

@@ -115,8 +115,9 @@ The config file lives at `config/minecraft_web_manager/config.json` inside MCDR'
 | `username` | `admin` | Login username |
 | `password.salt` / `password.hash` | generated | PBKDF2 salt and hash. The password itself is never stored |
 | `token_secret` | generated | Signing key for login tokens. Clearing it invalidates every active session immediately |
+| `token_ttl_seconds` | `2592000` (30 days) | Login session lifetime in seconds; sessions slide forward while actively used |
 
-Login tokens are valid for 8 hours and live in the browser's `sessionStorage`, so closing the tab ends the session.
+After login the browser receives an **HttpOnly + SameSite=Strict session cookie** (invisible to page scripts and never sent on cross-site requests), valid for 30 days by default. Active use keeps sliding the expiry forward, so normal usage does not require repeated logins. The "log out" button ends the session immediately; clearing `token_secret` also invalidates every session at once.
 
 ### Forgot the password
 
@@ -154,6 +155,7 @@ The dashboard has full control over your server — arbitrary commands, bans, co
 
 - It **listens on `127.0.0.1` by default**. Keeping that and connecting through an SSH tunnel is the safest way to reach it remotely
 - If you must expose it publicly, put it behind a reverse proxy such as Nginx or Caddy with HTTPS enabled. The plugin **does not provide TLS**; over plain HTTP your password and token travel in the clear
+- The login endpoint has a simple failure throttle (10 attempts per 60 seconds per source) and the interactive API docs are disabled by default; the session cookie is `HttpOnly` with `SameSite=Strict`, so page scripts cannot read the token
 - A reverse proxy must forward WebSocket upgrades, otherwise the live console cannot connect:
 
   ```nginx

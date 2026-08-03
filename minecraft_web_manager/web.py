@@ -6,18 +6,48 @@ import asyncio
 import collections
 import mimetypes
 import threading
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
 from .auth import issue_token, verify_token
-from .config import CONSOLE_BUFFER_SIZE, TOKEN_TTL_SECONDS
+from .config import CONSOLE_BUFFER_SIZE, DEFAULT_TOKEN_TTL_SECONDS
 from .metrics import RANGES
+
+# Session cookie: HttpOnly so page scripts never see the token, and SameSite=Strict
+# so cross-site pages can't ride an existing session (CSRF).
+SESSION_COOKIE = "mwm_session"
+
+# Cheap in-memory login throttle. PBKDF2 already costs ~100ms per attempt, but a
+# public-facing panel shouldn't allow an unbounded online brute-force either.
+_LOGIN_WINDOW_SECONDS = 60
+_LOGIN_MAX_ATTEMPTS = 10
+_login_attempts: dict[str, collections.deque] = {}
+_login_lock = threading.Lock()
+
+
+def _check_login_rate(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    now = time.time()
+    with _login_lock:
+        attempts = _login_attempts.setdefault(client_ip, collections.deque())
+        while attempts and attempts[0] < now - _LOGIN_WINDOW_SECONDS:
+            attempts.popleft()
+        if len(attempts) >= _LOGIN_MAX_ATTEMPTS:
+            raise HTTPException(status_code=429, detail="Too many login attempts, try again later")
+        attempts.append(now)
+
+
+def _clear_login_rate(request: Request) -> None:
+    client_ip = request.client.host if request.client else "unknown"
+    with _login_lock:
+        _login_attempts.pop(client_ip, None)
 
 # Explicit rather than left to mimetypes: the OS mapping varies by platform and the
 # charset matters (every page and script contains Chinese text).
@@ -197,8 +227,44 @@ class WebService:
             raise HTTPException(status_code=401, detail="Invalid or expired token")
         return claims
 
+    def _session_ttl(self) -> int:
+        try:
+            ttl = int(self.config.data.get("token_ttl_seconds", DEFAULT_TOKEN_TTL_SECONDS))
+        except (TypeError, ValueError):
+            ttl = DEFAULT_TOKEN_TTL_SECONDS
+        return max(300, ttl)
+
     def _build_app(self) -> FastAPI:
-        app = FastAPI(title="Minecraft Web Manager", version="0.1.0", docs_url="/api/docs", redoc_url=None)
+        # Interactive API docs are disabled: they were publicly reachable without
+        # authentication and reveal the whole command surface of the panel.
+        app = FastAPI(title="Minecraft Web Manager", version="0.1.0", docs_url=None, openapi_url=None, redoc_url=None)
+
+        @app.middleware("http")
+        async def renew_session(request: Request, call_next):
+            """Slide the session cookie forward while the admin is actively using it."""
+            response = await call_next(request)
+            if request.url.path == "/api/auth/logout":
+                return response  # never re-issue a cookie on the logout response
+            token = request.cookies.get(SESSION_COOKIE)
+            if token:
+                claims = verify_token(self.config.data["token_secret"], token)
+                if claims is not None:
+                    ttl = self._session_ttl()
+                    expires_at = int(claims.get("exp", 0))
+                    if expires_at - time.time() < ttl // 2:
+                        fresh, _ = issue_token(
+                            self.config.data["token_secret"], str(claims.get("sub", "admin")), ttl
+                        )
+                        response.set_cookie(
+                            SESSION_COOKIE,
+                            fresh,
+                            max_age=ttl,
+                            httponly=True,
+                            samesite="strict",
+                            secure=request.url.scheme == "https",
+                            path="/",
+                        )
+            return response
 
         @app.get("/assets/{filename}", include_in_schema=False)
         async def asset(filename: str) -> Response:
@@ -216,14 +282,26 @@ class WebService:
             self.started.set()
 
         async def require_user(request: Request) -> dict[str, Any]:
-            authorization = request.headers.get("authorization", "")
-            scheme, _, token = authorization.partition(" ")
-            if scheme.lower() != "bearer" or not token:
-                raise HTTPException(status_code=401, detail="Bearer token required")
-            return self._claims_from_token(token)
+            claims = None
+            token = request.cookies.get(SESSION_COOKIE)
+            if token:
+                claims = verify_token(self.config.data["token_secret"], token)
+            if claims is None:
+                # Bearer header is still accepted (e.g. for scripted API clients),
+                # but the browser uses the HttpOnly cookie.
+                authorization = request.headers.get("authorization", "")
+                scheme, _, token = authorization.partition(" ")
+                if scheme.lower() == "bearer" and token:
+                    claims = self._claims_from_token(token)
+            if claims is None:
+                raise HTTPException(status_code=401, detail="Invalid or expired session")
+            return claims
 
         @app.get("/", include_in_schema=False)
-        async def login_page() -> HTMLResponse:
+        async def login_page(request: Request) -> Response:
+            token = request.cookies.get(SESSION_COOKIE)
+            if token and verify_token(self.config.data["token_secret"], token) is not None:
+                return RedirectResponse("/console")
             return HTMLResponse(self.assets["login.html"][0])
 
         @app.get("/console", include_in_schema=False)
@@ -231,13 +309,30 @@ class WebService:
             return HTMLResponse(self.assets["console.html"][0])
 
         @app.post("/api/auth/login")
-        async def login(body: LoginRequest) -> dict[str, Any]:
+        async def login(body: LoginRequest, request: Request) -> Response:
+            _check_login_rate(request)
             if body.username != self.config.data["username"] or not self.config.verify_password(body.password):
                 raise HTTPException(status_code=401, detail="Invalid username or password")
-            token, expires_at = issue_token(
-                self.config.data["token_secret"], body.username, TOKEN_TTL_SECONDS
+            _clear_login_rate(request)
+            ttl = self._session_ttl()
+            token, expires_at = issue_token(self.config.data["token_secret"], body.username, ttl)
+            response = JSONResponse({"ok": True, "expires_at": expires_at})
+            response.set_cookie(
+                SESSION_COOKIE,
+                token,
+                max_age=ttl,
+                httponly=True,
+                samesite="strict",
+                secure=request.url.scheme == "https",
+                path="/",
             )
-            return {"access_token": token, "token_type": "bearer", "expires_at": expires_at}
+            return response
+
+        @app.post("/api/auth/logout")
+        async def logout() -> Response:
+            response = JSONResponse({"ok": True})
+            response.delete_cookie(SESSION_COOKIE, path="/")
+            return response
 
         @app.get("/api/server/status")
         async def status(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
@@ -271,7 +366,7 @@ class WebService:
                 result = await asyncio.to_thread(self.bridge.player_action, body.action, body.target, body.reason)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
-            except RuntimeError as error:
+            except Exception as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
             self.publish("status", {"event": "player_action", "action": body.action, "target": body.target, "by": user["sub"]})
             return result
@@ -304,7 +399,10 @@ class WebService:
 
         @app.get("/api/plugins")
         async def plugins(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
-            return {"plugins": await asyncio.to_thread(self.bridge.plugins)}
+            try:
+                return {"plugins": await asyncio.to_thread(self.bridge.plugins)}
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
 
         @app.post("/api/plugins/reload")
         async def reload_plugin(body: PluginReloadRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
@@ -312,6 +410,8 @@ class WebService:
                 result = await asyncio.to_thread(self.bridge.reload_plugin, body.plugin_id)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
             self.publish("status", {"event": "plugin_reload", "plugin_id": body.plugin_id, "by": user["sub"]})
             return result
 
@@ -337,26 +437,33 @@ class WebService:
                 result = await asyncio.to_thread(self.bridge.update_server_properties, body.changes)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
             self.publish("status", {"event": "properties_updated", "keys": result["applied"], "by": user["sub"]})
             return result
 
         @app.post("/api/commands")
         async def command(body: CommandRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            command_text = body.command.strip()
+            if not command_text:
+                raise HTTPException(status_code=400, detail="Command cannot be empty")
             # Echo the sent command into the console stream so the operator sees what
             # they issued; server output / replies arrive separately as their own lines.
             self.publish(
                 "console",
-                {"content": body.command, "raw": f"[Web/{user['sub']}] > {body.command}", "source": "command", "timestamp": ""},
+                {"content": command_text, "raw": f"[Web/{user['sub']}] > {command_text}", "source": "command", "timestamp": ""},
             )
             try:
                 return await asyncio.to_thread(
                     self.bridge.execute,
-                    body.command,
+                    command_text,
                     body.transport,
                     lambda line: self.publish("console", line),
                 )
-            except (RuntimeError, ValueError) as error:
+            except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
 
         @app.post("/api/server/actions")
         async def server_action(body: ActionRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
@@ -364,17 +471,24 @@ class WebService:
                 accepted = await asyncio.to_thread(self.bridge.server_action, body.action)
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
             self.publish("status", {"event": "server_action", "action": body.action, "by": user["sub"]})
             return {"accepted": accepted, "action": body.action}
 
         @app.websocket("/ws/events")
         async def events_socket(websocket: WebSocket) -> None:
-            token = websocket.query_params.get("token", "")
-            try:
-                self._claims_from_token(token)
-            except HTTPException:
-                await websocket.close(code=4401)
-                return
+            claims = None
+            token = websocket.cookies.get(SESSION_COOKIE)
+            if token:
+                claims = verify_token(self.config.data["token_secret"], token)
+            if claims is None:
+                # Legacy fallback for scripted clients that cannot send cookies.
+                try:
+                    claims = self._claims_from_token(websocket.query_params.get("token", ""))
+                except HTTPException:
+                    await websocket.close(code=4401)
+                    return
             await websocket.accept()
             queue = await self.hub.register()
 

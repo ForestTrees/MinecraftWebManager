@@ -8,23 +8,75 @@ from typing import Any
 
 
 def _unescape(value: str) -> str:
-    """Undo the Java-properties escaping the server writes (e.g. minecraft\\:normal)."""
+    """Undo the Java-properties escaping the server writes.
+
+    Vanilla writes non-ASCII characters as ``\\uXXXX`` (e.g. the MOTD section sign
+    becomes ``\\u00A7``) and escapes tabs, newlines and the ``\\:`` / ``\\=``
+    separators. Naively stripping backslashes corrupts those values, so every escape
+    is decoded back to the character it stands for.
+    """
     out = []
     index = 0
     while index < len(value):
         char = value[index]
-        if char == "\\" and index + 1 < len(value):
-            out.append(value[index + 1])
-            index += 2
+        if char != "\\" or index + 1 >= len(value):
+            out.append(char)
+            index += 1
             continue
-        out.append(char)
-        index += 1
+        escaped = value[index + 1]
+        if escaped == "u" and index + 5 < len(value):
+            hex_digits = value[index + 2 : index + 6]
+            try:
+                out.append(chr(int(hex_digits, 16)))
+            except ValueError:
+                out.append(char)  # malformed escape; keep it as-is
+            else:
+                index += 6
+                continue
+        simple = {
+            "t": "\t",
+            "n": "\n",
+            "r": "\r",
+            "f": "\f",
+            "\\": "\\",
+            ":": ":",
+            "=": "=",
+            " ": " ",
+            "#": "#",
+            "!": "!",
+        }
+        out.append(simple.get(escaped, escaped))
+        index += 2
     return "".join(out)
 
 
 def _escape(value: str) -> str:
-    escaped = value.replace("\\", "\\\\").replace(":", "\\:").replace("=", "\\=")
-    return escaped
+    """Escape a value the same way Java ``Properties.store`` does.
+
+    Non-ASCII characters become ``\\uXXXX`` so the file stays readable by Java's
+    ISO-8859-1 based ``Properties.load`` regardless of the filesystem charset.
+    """
+    out = []
+    for position, char in enumerate(value):
+        if char == "\\":
+            out.append("\\\\")
+        elif char == "\t":
+            out.append("\\t")
+        elif char == "\n":
+            out.append("\\n")
+        elif char == "\r":
+            out.append("\\r")
+        elif char == "\f":
+            out.append("\\f")
+        elif char in (":", "=", "#", "!"):
+            out.append("\\" + char)
+        elif position == 0 and char == " ":
+            out.append("\\ ")
+        elif ord(char) < 0x20 or ord(char) > 0x7E:
+            out.append(f"\\u{ord(char):04X}")
+        else:
+            out.append(char)
+    return "".join(out)
 
 
 def read(path: Path) -> list[dict[str, str]]:

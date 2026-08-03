@@ -48,9 +48,20 @@ def on_load(server, prev_module) -> None:
         server.logger.warning("Save it now. To reset it later, clear password.salt and password.hash in the plugin config, then reload.")
     bridge = MCDRBridge(server, _players)
     _history = MetricsHistory(bridge.sample, server.logger)
-    _history.start()
-    _service = WebService(bridge, config, server.logger, _history)
-    _service.start()
+    try:
+        _history.start()
+        _service = WebService(bridge, config, server.logger, _history)
+        _service.start()
+    except Exception:
+        # Don't leak the metrics thread if the web server fails to come up (e.g. the
+        # configured port is already taken) — roll back and let MCDR report the error.
+        if _history is not None:
+            _history.stop()
+            _history = None
+        if _service is not None:
+            _service.stop()
+            _service = None
+        raise
     server.logger.info("Minecraft Web Manager is listening on http://%s:%s", config.data["host"], config.data["port"])
     _seed_online_players(server)
 

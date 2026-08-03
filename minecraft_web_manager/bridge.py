@@ -48,6 +48,7 @@ _PLAYER_ACTIONS: dict[str, tuple[str, str]] = {
 }
 
 _PID_REFRESH_SECONDS = 20.0
+_TICK_TTL_SECONDS = 5.0
 
 _TPS_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*(?:tps|ticks per second)", re.IGNORECASE)
 _MSPT_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*ms", re.IGNORECASE)
@@ -90,6 +91,10 @@ class MCDRBridge:
         self._pids: list[int] = []
         self._pids_at = 0.0
         self._processes: dict[int, psutil.Process] = {}
+        self._tick_cache: tuple[float, dict[str, Any]] | None = None
+        self._tick_lock = threading.Lock()
+        self._world_cache: tuple[tuple[tuple[str, int], ...], dict[str, Any]] | None = None
+        self._world_lock = threading.Lock()
 
     def call(self, operation: Callable[[], Any], timeout: float = 5.0) -> Any:
         """Run an operation on MCDR's TaskExecutor and wait from the web thread."""
@@ -192,8 +197,13 @@ class MCDRBridge:
         """Best-effort TPS/MSPT reading via RCON (e.g. Carpet's or vanilla's ``/tick query``).
 
         Falls back to the raw response text when the wording can't be confidently parsed,
-        instead of guessing at numbers that might be wrong.
+        instead of guessing at numbers that might be wrong. The result is cached for a
+        few seconds so every open browser tab doesn't trigger its own RCON round trip.
         """
+        now = time.monotonic()
+        with self._tick_lock:
+            if self._tick_cache is not None and now - self._tick_cache[0] < _TICK_TTL_SECONDS:
+                return self._tick_cache[1]
 
         def query() -> str | None:
             if not self.server.is_rcon_running():
@@ -202,15 +212,19 @@ class MCDRBridge:
 
         raw = self.call(query, timeout=5.0)
         if raw is None:
-            return {"available": False, "raw": None, "tps": None, "mspt": None}
-        tps_match = _TPS_PATTERN.search(raw)
-        mspt_match = _MSPT_PATTERN.search(raw)
-        return {
-            "available": True,
-            "raw": raw,
-            "tps": float(tps_match.group(1)) if tps_match else None,
-            "mspt": float(mspt_match.group(1)) if mspt_match else None,
-        }
+            report: dict[str, Any] = {"available": False, "raw": None, "tps": None, "mspt": None}
+        else:
+            tps_match = _TPS_PATTERN.search(raw)
+            mspt_match = _MSPT_PATTERN.search(raw)
+            report = {
+                "available": True,
+                "raw": raw,
+                "tps": float(tps_match.group(1)) if tps_match else None,
+                "mspt": float(mspt_match.group(1)) if mspt_match else None,
+            }
+        with self._tick_lock:
+            self._tick_cache = (now, report)
+        return report
 
     def _paths(self) -> tuple[Path, Path]:
         """(server working directory, world save directory), resolved on MCDR's thread."""
@@ -229,17 +243,39 @@ class MCDRBridge:
 
         return self.call(resolve)
 
+    def _world_signature(self, world_directory: Path) -> tuple[tuple[str, int], ...]:
+        """(path, mtime_ns) pairs for every file world() reads.
+
+        The save files only change when the server writes them, so comparing the
+        signature is enough to serve the static world info from cache between saves —
+        this avoids re-parsing level.dat on every 10s overview poll.
+        """
+        paths = [
+            world_directory / "level.dat",
+            world_directory / "data" / "minecraft" / "world_gen_settings.dat",
+        ]
+        signature = []
+        for path in paths:
+            try:
+                stat = path.stat()
+            except OSError:
+                signature.append((str(path), 0))
+            else:
+                signature.append((str(path), stat.st_mtime_ns))
+        return tuple(signature)
+
     def world(self) -> dict[str, Any]:
         _, world_directory = self._paths()
+        signature = self._world_signature(world_directory)
+        with self._world_lock:
+            if self._world_cache is not None and self._world_cache[0] == signature:
+                return self._world_cache[1]
         result: dict[str, Any] = {
             "level_name": None,
             "minecraft_version": None,
             "difficulty": None,
             "seed": None,
-            "day": None,
-            "time_of_day": None,
-            "raining": None,
-            "thundering": None,
+            "from_save": True,
         }
         try:
             data = nbt.load(world_directory / "level.dat")["Data"]
@@ -253,51 +289,52 @@ class MCDRBridge:
         except (OSError, ValueError, KeyError):
             pass
         try:
-            weather = nbt.load(world_directory / "data" / "minecraft" / "weather.dat")["data"]
-            result["raining"] = bool(weather.get("raining"))
-            result["thundering"] = bool(weather.get("thundering"))
-        except (OSError, ValueError, KeyError):
-            pass
-        try:
             gen_settings = nbt.load(world_directory / "data" / "minecraft" / "world_gen_settings.dat")["data"]
             seed = gen_settings.get("seed")
             result["seed"] = str(seed) if seed is not None else None
         except (OSError, ValueError, KeyError):
             pass
-        try:
-            clocks = nbt.load(world_directory / "data" / "minecraft" / "world_clocks.dat")["data"]
-            overworld = clocks.get("minecraft:overworld")
-            total_ticks = overworld.get("total_ticks") if isinstance(overworld, dict) else None
-            if total_ticks is not None:
-                result["day"] = total_ticks // 24000
-                result["time_of_day"] = total_ticks % 24000
-        except (OSError, ValueError, KeyError):
-            pass
-
         # Everything here comes from the save files, which only change when the server
-        # saves, so these values lag reality by minutes. Seed / level name / difficulty
-        # are static enough for that not to matter; the UI no longer shows time or
-        # weather, so no RCON round-trip is spent trying to make them live.
-        result["from_save"] = True
+        # saves, so these values lag reality by minutes — static enough for a cache
+        # keyed on file mtimes.
+        with self._world_lock:
+            self._world_cache = (signature, result)
         return result
 
     def players_detail(self) -> list[dict[str, Any]]:
         players = self.players
 
-        def query_all() -> dict[str, tuple[str | None, str | None]]:
+        def query_all() -> tuple[dict[str, tuple[str | None, str | None]], dict[str, dict[str, Any]]]:
+            # Snapshot _players on MCDR's thread: join/leave events mutate it there,
+            # and iterating the live dict from the web thread could race with a
+            # concurrent mutation (RuntimeError mid-iteration).
+            snapshot = dict(players)
             if not self.server.is_rcon_running():
-                return {name: (None, None) for name in players}
+                return {name: (None, None) for name in snapshot}, snapshot
             queried: dict[str, tuple[str | None, str | None]] = {}
-            for name in players:
+            for name in snapshot:
                 pos = self.server.rcon_query(f"data get entity {name} Pos")
                 dimension = self.server.rcon_query(f"data get entity {name} Dimension")
                 queried[name] = (pos, dimension)
-            return queried
+            return queried, snapshot
 
-        raw_results = self.call(query_all, timeout=10.0) if players else {}
+        raw_results: dict[str, tuple[str | None, str | None]] = {}
+        snapshot: dict[str, dict[str, Any]] = {}
+        if players:
+            # RCON round trips are serialised on MCDR's thread; give larger rosters a
+            # budget that scales with size instead of a fixed 10s wall.
+            timeout = max(10.0, min(60.0, len(players) * 2.0))
+            try:
+                raw_results, snapshot = self.call(query_all, timeout=timeout)
+            except TimeoutError:
+                # Degrade gracefully: still list everyone, just without positions.
+                try:
+                    snapshot = dict(players)
+                except RuntimeError:
+                    snapshot = {}  # player list changed mid-copy; next poll will retry
         now = time.time()
         detail = []
-        for name, state in sorted(players.items()):
+        for name, state in sorted(snapshot.items()):
             pos_text, dimension_text = raw_results.get(name, (None, None))
             position = None
             if pos_text:
@@ -356,12 +393,14 @@ class MCDRBridge:
     def plugins(self) -> list[dict[str, Any]]:
         def get_plugins() -> list[dict[str, Any]]:
             metadata = self.server.get_all_metadata()
+            self_plugin_id = self.server.get_self_metadata().id
             return [
                 {
                     "id": plugin_id,
                     "name": self._string_or_none(getattr(item, "name", plugin_id)),
                     "version": self._string_or_none(getattr(item, "version", None)),
                     "description": self._string_or_none(getattr(item, "description", None)),
+                    "self": plugin_id == self_plugin_id,
                 }
                 for plugin_id, item in sorted(metadata.items())
             ]
@@ -371,7 +410,19 @@ class MCDRBridge:
     def reload_plugin(self, plugin_id: str) -> dict[str, Any]:
         if not _PLUGIN_ID_PATTERN.match(plugin_id or ""):
             raise ValueError(f"Invalid plugin id: {plugin_id!r}")
-        result = self.call(lambda: self.server.reload_plugin(plugin_id), timeout=20.0)
+
+        def do_reload() -> bool:
+            # Reloading this very plugin would stop the web server mid-request and
+            # leave the caller with a hanging request / reset connection. That flow
+            # only works from the MCDR console.
+            if plugin_id == self.server.get_self_metadata().id:
+                raise ValueError(
+                    "Cannot reload this plugin from the web panel; "
+                    f"use !!MCDR reload plugin {plugin_id} in the MCDR console instead"
+                )
+            return bool(self.server.reload_plugin(plugin_id))
+
+        result = self.call(do_reload, timeout=20.0)
         return {"accepted": bool(result), "plugin_id": plugin_id}
 
     def mods(self) -> list[dict[str, Any]]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import copy
 import hashlib
 import hmac
@@ -20,12 +21,14 @@ README_LINES = [
     "Minecraft Web Manager 配置文件。",
     "重置密码：把 password.salt 和 password.hash 都改成空字符串 \"\"，保存后执行 !!MCDR reload plugin minecraft_web_manager，新的一次性密码会打印在 MCDR 日志里。",
     "token_secret 是登录令牌的签名密钥，由插件自动生成；清空它会让所有已登录会话立即失效。",
+    "token_ttl_seconds 是登录会话有效期（秒），默认 2592000（30 天）；活跃使用时会自动续期。",
     "host/port 是网页面板的监听地址，默认仅本机可访问；修改后需重载插件。",
     "RCON 不在这里配置：Minecraft 端在 server/server.properties，MCDR 端在 config.yml，两边的端口和密码必须一致。",
 ]
 
-# Tuning knobs nobody needs to change live here instead of in the config file.
-TOKEN_TTL_SECONDS = 28800
+# Login sessions default to 30 days; active use slides the expiry forward, so a
+# browser that is opened occasionally stays logged in without daily re-login.
+DEFAULT_TOKEN_TTL_SECONDS = 30 * 24 * 3600
 CONSOLE_BUFFER_SIZE = 1000
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -35,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "username": "admin",
     "password": {"salt": "", "hash": ""},
     "token_secret": "",
+    "token_ttl_seconds": DEFAULT_TOKEN_TTL_SECONDS,
 }
 
 
@@ -90,7 +94,12 @@ class ConfigStore:
         credentials = self.data["password"]
         if not credentials["salt"] or not credentials["hash"]:
             return False
-        salt = base64.urlsafe_b64decode(credentials["salt"])
-        expected = base64.urlsafe_b64decode(credentials["hash"])
+        try:
+            salt = base64.urlsafe_b64decode(credentials["salt"])
+            expected = base64.urlsafe_b64decode(credentials["hash"])
+        except (ValueError, TypeError, binascii.Error):
+            # Hand-edited config can hold invalid base64; treat it as "wrong password"
+            # instead of crashing the login endpoint with a 500.
+            return False
         actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 310_000)
         return hmac.compare_digest(actual, expected)
