@@ -124,6 +124,11 @@ class PlayerActionRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=200)
 
 
+class BotFlagRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    is_bot: bool = True
+
+
 class EventHub:
     """Fan-out events from MCDR's thread to authenticated WebSocket clients."""
 
@@ -369,6 +374,20 @@ class WebService:
             except Exception as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
             self.publish("status", {"event": "player_action", "action": body.action, "target": body.target, "by": user["sub"]})
+            return result
+
+        @app.post("/api/players/bot")
+        async def set_bot_flag(body: BotFlagRequest, user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.set_bot_flag, body.name, body.is_bot)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish(
+                "status",
+                {"event": "bot_flag", "name": result["name"], "is_bot": result["is_bot"], "by": user["sub"]},
+            )
             return result
 
         @app.get("/api/world")

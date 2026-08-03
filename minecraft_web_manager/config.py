@@ -22,6 +22,7 @@ README_LINES = [
     "重置密码：把 password.salt 和 password.hash 都改成空字符串 \"\"，保存后执行 !!MCDR reload plugin minecraft_web_manager，新的一次性密码会打印在 MCDR 日志里。",
     "token_secret 是登录令牌的签名密钥，由插件自动生成；清空它会让所有已登录会话立即失效。",
     "token_ttl_seconds 是登录会话有效期（秒），默认 2592000（30 天）；活跃使用时会自动续期。",
+    "bot_names 是手动标记为假人（Carpet bot）的玩家名列表（小写）；自动识别之外的手动兜底，可留空。",
     "host/port 是网页面板的监听地址，默认仅本机可访问；修改后需重载插件。",
     "RCON 不在这里配置：Minecraft 端在 server/server.properties，MCDR 端在 config.yml，两边的端口和密码必须一致。",
 ]
@@ -39,6 +40,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "password": {"salt": "", "hash": ""},
     "token_secret": "",
     "token_ttl_seconds": DEFAULT_TOKEN_TTL_SECONDS,
+    "bot_names": [],
 }
 
 

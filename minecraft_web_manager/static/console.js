@@ -1,4 +1,4 @@
-const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null };
+const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false };
 const $ = (id) => document.getElementById(id);
 
 const VIEW_TITLES = { console: '实时控制台', players: '玩家管理', world: 'World', performance: '服务器状态' };
@@ -361,45 +361,75 @@ function sortRoster(players) {
   });
 }
 
-function rosterActionsHtml(player) {
+function rosterActionsHtml(player, isBot = false) {
   if (!player.name) return '<span class="na">无名称</span>';
   const name = escapeHtml(player.name);
   const buttons = [];
-  buttons.push(`<button class="link-btn" data-player-action="${player.op ? 'deop' : 'op'}" data-target="${name}">${player.op ? '取消 OP' : '设为 OP'}</button>`);
+  if (!isBot) {
+    // Bots are not real accounts: OP / whitelist management is meaningless for them.
+    buttons.push(`<button class="link-btn" data-player-action="${player.op ? 'deop' : 'op'}" data-target="${name}">${player.op ? '取消 OP' : '设为 OP'}</button>`);
+    buttons.push(`<button class="link-btn" data-player-action="${player.whitelisted ? 'whitelist_remove' : 'whitelist_add'}" data-target="${name}">${player.whitelisted ? '移出白名单' : '加入白名单'}</button>`);
+  }
   if (player.online) buttons.push(`<button class="link-btn" data-player-action="kick" data-target="${name}">踢出</button>`);
   buttons.push(`<button class="link-btn danger" data-player-action="${player.banned ? 'pardon' : 'ban'}" data-target="${name}">${player.banned ? '解封' : '封禁'}</button>`);
   buttons.push(`<button class="link-btn danger" data-player-action="ban_ip" data-target="${escapeHtml(player.ip || player.name)}">封 IP</button>`);
-  buttons.push(`<button class="link-btn" data-player-action="${player.whitelisted ? 'whitelist_remove' : 'whitelist_add'}" data-target="${name}">${player.whitelisted ? '移出白名单' : '加入白名单'}</button>`);
+  if (!isBot) {
+    buttons.push(`<button class="link-btn" data-bot-flag="1" data-target="${name}">标记为假人</button>`);
+  } else if (player.bot_source === 'manual') {
+    buttons.push(`<button class="link-btn" data-bot-flag="0" data-target="${name}">取消标记</button>`);
+  }
   return `<div class="row-actions">${buttons.join('')}</div>`;
 }
 
+function rosterRowHtml(p, isBot) {
+  const marks = [];
+  if (p.is_bot) marks.push(`<span class="tag bot" title="${p.bot_source === 'manual' ? '手动标记' : '自动识别'}">假人</span>`);
+  if (p.whitelisted) marks.push('<span class="tag muted">白名单</span>');
+  if (p.banned) marks.push(`<span class="tag danger" title="${escapeHtml(p.ban_reason || '')}">已封禁</span>`);
+  if (!p.has_played) marks.push('<span class="tag muted">未进入过</span>');
+  // online but no recorded join time -> recovered after a plugin reload
+  const onlineDuration = p.joined_at ? formatDuration(p.online_seconds) : '<span class="na" title="插件重载后无法得知加入时间">在线中</span>';
+  const lastSeen = p.online ? '<span class="tag">在线</span>' : (p.last_seen ? formatDateTime(p.last_seen) : '<span class="na">未知</span>');
+  return `
+    <tr>
+      <td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name">${escapeHtml(p.name || '(未知)')}</span></td>
+      <td>${p.online ? '<span class="tag">在线</span>' : '<span class="tag muted">离线</span>'}</td>
+      <td>${marks.join(' ') || '<span class="na">--</span>'}</td>
+      <td class="mono">${escapeHtml(p.ip || (p.online ? '未知' : '--'))}</td>
+      <td>${p.online ? onlineDuration : '--'}</td>
+      <td>${lastSeen}</td>
+      <td>${escapeHtml(p.dimension || '--')}</td>
+      <td class="mono">${p.position ? p.position.join(', ') : '--'}</td>
+      <td class="mono">${escapeHtml(p.uuid || '--')}</td>
+      <td>${rosterActionsHtml(p, isBot)}</td>
+    </tr>`;
+}
+
 function renderRoster(players) {
+  const bots = players.filter((p) => p.is_bot);
+  const humans = players.filter((p) => !p.is_bot);
   if (!players.length) {
     $('players-table-body').innerHTML = '<tr><td colspan="10">暂无玩家记录</td></tr>';
+    $('players-bots-body').innerHTML = '';
+    $('players-bots-body').hidden = true;
     return;
   }
-  $('players-table-body').innerHTML = sortRoster(players).map((p) => {
-    const marks = [];
-    if (p.whitelisted) marks.push('<span class="tag muted">白名单</span>');
-    if (p.banned) marks.push(`<span class="tag danger" title="${escapeHtml(p.ban_reason || '')}">已封禁</span>`);
-    if (!p.has_played) marks.push('<span class="tag muted">未进入过</span>');
-    // online but no recorded join time -> recovered after a plugin reload
-    const onlineDuration = p.joined_at ? formatDuration(p.online_seconds) : '<span class="na" title="插件重载后无法得知加入时间">在线中</span>';
-    const lastSeen = p.online ? '<span class="tag">在线</span>' : (p.last_seen ? formatDateTime(p.last_seen) : '<span class="na">未知</span>');
-    return `
-      <tr>
-        <td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name">${escapeHtml(p.name || '(未知)')}</span></td>
-        <td>${p.online ? '<span class="tag">在线</span>' : '<span class="tag muted">离线</span>'}</td>
-        <td>${marks.join(' ') || '<span class="na">--</span>'}</td>
-        <td class="mono">${escapeHtml(p.ip || (p.online ? '未知' : '--'))}</td>
-        <td>${p.online ? onlineDuration : '--'}</td>
-        <td>${lastSeen}</td>
-        <td>${escapeHtml(p.dimension || '--')}</td>
-        <td class="mono">${p.position ? p.position.join(', ') : '--'}</td>
-        <td class="mono">${escapeHtml(p.uuid || '--')}</td>
-        <td>${rosterActionsHtml(p)}</td>
-      </tr>`;
-  }).join('');
+  const toggleRow = bots.length
+    ? `<tr class="bot-toggle-row" data-bot-toggle>
+        <td colspan="10">
+          <button type="button" class="link-btn bot-toggle-button"><span class="tag bot">假人</span> 共 ${bots.length} 个 <span class="bot-chevron">${state.botsExpanded ? '▾' : '▸'}</span></button>
+          <span class="na">${state.botsExpanded ? '点击收起' : '点击展开'}</span>
+        </td>
+      </tr>`
+    : '';
+  $('players-table-body').innerHTML = sortRoster(humans).map((p) => rosterRowHtml(p, false)).join('') + toggleRow;
+  if (bots.length) {
+    $('players-bots-body').innerHTML = sortRoster(bots).map((p) => rosterRowHtml(p, true)).join('');
+    $('players-bots-body').hidden = !state.botsExpanded;
+  } else {
+    $('players-bots-body').innerHTML = '';
+    $('players-bots-body').hidden = true;
+  }
 }
 
 // One fetch feeds both the roster table and the access-control lists.
@@ -410,6 +440,8 @@ async function refreshRoster() {
     renderAccess(data);
   } catch (error) {
     $('players-table-body').innerHTML = `<tr><td colspan="10">读取失败：${escapeHtml(error.message)}</td></tr>`;
+    $('players-bots-body').innerHTML = '';
+    $('players-bots-body').hidden = true;
   }
 }
 
@@ -458,6 +490,34 @@ document.addEventListener('click', (event) => {
   if (!button) return;
   performPlayerAction(button.dataset.playerAction, button.dataset.target || null, button.dataset.reason || null);
 });
+document.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-bot-toggle]');
+  if (toggle) {
+    state.botsExpanded = !state.botsExpanded;
+    $('players-bots-body').hidden = !state.botsExpanded;
+    const chevron = toggle.querySelector('.bot-chevron');
+    if (chevron) chevron.textContent = state.botsExpanded ? '▾' : '▸';
+    const hint = toggle.querySelector('.na');
+    if (hint) hint.textContent = state.botsExpanded ? '点击收起' : '点击展开';
+  }
+  const flagButton = event.target.closest('[data-bot-flag]');
+  if (flagButton) setBotFlag(flagButton.dataset.target || '', flagButton.dataset.botFlag === '1');
+});
+async function setBotFlag(target, isBot) {
+  const verb = isBot ? '标记为假人' : '取消假人标记';
+  const confirmed = await confirmDialog(
+    `确认要${verb}「${target}」吗？${isBot ? '该玩家将在列表中按假人折叠展示。' : ''}`,
+    { title: verb, confirmText: verb }
+  );
+  if (!confirmed) return;
+  try {
+    await api('/api/players/bot', { method: 'POST', body: JSON.stringify({ name: target, is_bot: isBot }) });
+    showToast(`${verb}成功：${target}`);
+    refreshRoster();
+  } catch (error) {
+    showToast(`${verb}失败：${error.message}`, { type: 'error' });
+  }
+}
 document.querySelectorAll('[data-access-action]').forEach((button) => button.addEventListener('click', () => {
   performPlayerAction(button.dataset.accessAction, null, null);
 }));

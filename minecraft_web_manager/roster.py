@@ -61,6 +61,7 @@ def build(server_directory: Path, world_directory: Path) -> dict[str, Any]:
     op_map = {uuid: entry for entry in ops if (uuid := _uuid_of(entry))}
     whitelist_map = {uuid: entry for entry in whitelist if (uuid := _uuid_of(entry))}
     banned_map = {uuid: entry for entry in banned_players if (uuid := _uuid_of(entry))}
+    usercache_map = {uuid: entry for entry in usercache if (uuid := _uuid_of(entry))}
 
     # A name can be missing from usercache but present in ops/whitelist/bans, so merge
     # every source before deciding a player is nameless.
@@ -87,6 +88,7 @@ def build(server_directory: Path, world_directory: Path) -> dict[str, Any]:
                 "ban_reason": (ban or {}).get("reason"),
                 "has_played": uuid in played,
                 "last_seen": played.get(uuid),
+                "in_usercache": uuid in usercache_map,
             }
         )
 

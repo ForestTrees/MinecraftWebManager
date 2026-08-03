@@ -46,7 +46,7 @@ def on_load(server, prev_module) -> None:
         config.set_password(bootstrap_password)
         server.logger.warning("Minecraft Web Manager bootstrap password: %s", bootstrap_password)
         server.logger.warning("Save it now. To reset it later, clear password.salt and password.hash in the plugin config, then reload.")
-    bridge = MCDRBridge(server, _players)
+    bridge = MCDRBridge(server, _players, config)
     _history = MetricsHistory(bridge.sample, server.logger)
     try:
         _history.start()

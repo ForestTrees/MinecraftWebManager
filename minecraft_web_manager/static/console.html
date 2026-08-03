@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Minecraft Web Manager · 控制台</title>
-    <link rel="stylesheet" href="/assets/style.css?v=9" />
-    <script src="/assets/theme.js?v=9"></script>
+    <link rel="stylesheet" href="/assets/style.css?v=10" />
+    <script src="/assets/theme.js?v=10"></script>
   </head>
   <body>
     <div class="app">
@@ -132,13 +132,14 @@
               </div>
 
               <div class="subview active" data-subview="roster">
-                <p class="hint">包含所有进入过本服的玩家；在线与 OP 置顶。坐标 / 维度需 RCON，Ping 在 vanilla 下不可用。</p>
+                <p class="hint">包含所有进入过本服的玩家；在线与 OP 置顶。坐标 / 维度需 RCON，Ping 在 vanilla 下不可用。Carpet 假人自动识别并以折叠分组展示。</p>
                 <div class="table-scroll">
                   <table class="data-table">
                     <thead>
                       <tr><th>玩家</th><th>状态</th><th>标记</th><th>IP</th><th>在线时长</th><th>最后在线</th><th>维度</th><th>坐标</th><th>UUID</th><th>操作</th></tr>
                     </thead>
                     <tbody id="players-table-body"><tr><td colspan="10">正在读取…</td></tr></tbody>
+                    <tbody id="players-bots-body" hidden></tbody>
                   </table>
                 </div>
               </div>
@@ -279,7 +280,7 @@
       </div>
     </div>
 
-    <script src="/assets/chart.js?v=9"></script>
-    <script src="/assets/console.js?v=9"></script>
+    <script src="/assets/chart.js?v=10"></script>
+    <script src="/assets/console.js?v=10"></script>
   </body>
 </html>

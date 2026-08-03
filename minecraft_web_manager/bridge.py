@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import ipaddress
+import hashlib
 import json
 import os
 import re
 import threading
 import time
+import uuid
 import zipfile
 from pathlib import Path
 from typing import Any, Callable
@@ -23,6 +25,10 @@ from . import nbt, properties, roster
 # command (or arguments) into the console/RCON line, so targets are validated not escaped.
 _PLAYER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 _PLUGIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+# Carpet fake players always get the Java offline-mode UUID derived from their name,
+# no matter how the server itself is configured.
+_OFFLINE_UUID_PREFIX = "OfflinePlayer:"
 
 # Values never sent to the browser; submitting an empty string leaves them unchanged.
 _SENSITIVE_PROPERTY_KEYS = {
@@ -84,9 +90,10 @@ class WebCommandSource(PluginCommandSource):
 
 
 class MCDRBridge:
-    def __init__(self, server, players: dict[str, dict[str, Any]]):
+    def __init__(self, server, players: dict[str, dict[str, Any]], config=None):
         self.server = server
         self.players = players
+        self.config = config
         self.started_at = time.time()
         self._pids: list[int] = []
         self._pids_at = 0.0
@@ -474,6 +481,69 @@ class MCDRBridge:
         server_directory, _ = self._paths()
         return properties.update(server_directory / "server.properties", changes)
 
+    @staticmethod
+    def _offline_uuid(name: str) -> uuid.UUID:
+        """The UUID Java's UUID.nameUUIDFromBytes("OfflinePlayer:" + name) produces.
+
+        Carpet fake players use exactly this UUID regardless of the server's
+        online-mode, so matching it is the core bot signal.
+        """
+        digest = hashlib.md5((_OFFLINE_UUID_PREFIX + name).encode("utf-8")).digest()
+        return uuid.UUID(bytes=digest, version=3)
+
+    @staticmethod
+    def _normalize_uuid(value: Any) -> str:
+        # Registry files may store UUIDs with or without dashes; compare on the bare hex.
+        return str(value).replace("-", "").lower()
+
+    def _classify_bot(
+        self, player: dict[str, Any], online_mode: bool, manual_bots: set[str]
+    ) -> tuple[bool, str | None]:
+        """Return (is_bot, source) where source is "manual" or "auto".
+
+        Manual list always wins. Otherwise: on online-mode servers the offline-UUID
+        match alone is decisive (real players have Mojang-signed UUIDs). On offline
+        servers real players share the offline-UUID scheme, so the auxiliary signals
+        are required: never seen in usercache and no captured IP login line.
+        """
+        name = (player.get("name") or "").lower()
+        if name in manual_bots:
+            return True, "manual"
+        player_uuid = player.get("uuid")
+        if not name or not player_uuid:
+            return False, None
+        try:
+            uuid_matches = self._normalize_uuid(player_uuid) == self._normalize_uuid(
+                self._offline_uuid(player["name"])
+            )
+        except (ValueError, TypeError):
+            uuid_matches = False
+        if not uuid_matches:
+            return False, None
+        if online_mode:
+            return True, "auto"
+        if player.get("in_usercache") or player.get("ip"):
+            return False, None
+        return True, "auto"
+
+    def set_bot_flag(self, name: str, is_bot: bool) -> dict[str, Any]:
+        """Add/remove a manual bot mark, persisted into config bot_names."""
+        if not _PLAYER_NAME_PATTERN.match(name or ""):
+            raise ValueError(f"Invalid player name: {name!r}")
+        if self.config is None:
+            raise RuntimeError("Bot flagging requires the plugin config")
+        key = name.lower()
+        with self.config.lock:
+            bot_names = list(self.config.data.get("bot_names") or [])
+            if is_bot:
+                if key not in bot_names:
+                    bot_names.append(key)
+            else:
+                bot_names = [entry for entry in bot_names if entry != key]
+            self.config.data["bot_names"] = bot_names
+            self.config.save()
+        return {"name": name, "is_bot": is_bot}
+
     def roster(self) -> dict[str, Any]:
         """Every player the server has ever recorded, merged with live online state."""
         server_directory, world_directory = self._paths()
@@ -483,6 +553,8 @@ class MCDRBridge:
         settings = {entry["key"]: entry["value"] for entry in properties.read(server_directory / "server.properties")}
         data["whitelist_enabled"] = settings.get("white-list") == "true"
         data["whitelist_enforced"] = settings.get("enforce-whitelist") == "true"
+        online_mode = settings.get("online-mode") == "true"
+        manual_bots = {str(entry).lower() for entry in (self.config.data.get("bot_names") or [])} if self.config else set()
         online = {entry["name"].lower(): entry for entry in self.players_detail() if entry.get("name")}
 
         for player in data["players"]:
@@ -498,28 +570,30 @@ class MCDRBridge:
                     "position": (live or {}).get("position"),
                 }
             )
+            player["is_bot"], player["bot_source"] = self._classify_bot(player, online_mode, manual_bots)
         # Anyone online but absent from every registry file (e.g. usercache not flushed yet)
         # still belongs in the roster rather than silently disappearing.
         for live in online.values():
-            data["players"].append(
-                {
-                    "uuid": live.get("uuid"),
-                    "name": live.get("name"),
-                    "op": False,
-                    "op_level": None,
-                    "whitelisted": False,
-                    "banned": False,
-                    "ban_reason": None,
-                    "has_played": True,
-                    "last_seen": None,
-                    "online": True,
-                    "ip": live.get("ip"),
-                    "joined_at": live.get("joined_at"),
-                    "online_seconds": live.get("online_seconds"),
-                    "dimension": live.get("dimension"),
-                    "position": live.get("position"),
-                }
-            )
+            player = {
+                "uuid": live.get("uuid"),
+                "name": live.get("name"),
+                "op": False,
+                "op_level": None,
+                "whitelisted": False,
+                "banned": False,
+                "ban_reason": None,
+                "has_played": True,
+                "last_seen": None,
+                "in_usercache": False,
+                "online": True,
+                "ip": live.get("ip"),
+                "joined_at": live.get("joined_at"),
+                "online_seconds": live.get("online_seconds"),
+                "dimension": live.get("dimension"),
+                "position": live.get("position"),
+            }
+            player["is_bot"], player["bot_source"] = self._classify_bot(player, online_mode, manual_bots)
+            data["players"].append(player)
         return data
 
     @staticmethod

@@ -27,7 +27,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### Player management
 
-- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top
+- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Carpet fake players (bots) are detected automatically and shown in a collapsible group, and can also be flagged manually per row
 - Per-player actions: op / deop, kick, ban, ban IP, add to / remove from whitelist
 - **Whitelist**: toggle enforcement, reload the list, add and remove entries
 - **Operators**: view, grant and revoke OP
@@ -116,6 +116,7 @@ The config file lives at `config/minecraft_web_manager/config.json` inside MCDR'
 | `password.salt` / `password.hash` | generated | PBKDF2 salt and hash. The password itself is never stored |
 | `token_secret` | generated | Signing key for login tokens. Clearing it invalidates every active session immediately |
 | `token_ttl_seconds` | `2592000` (30 days) | Login session lifetime in seconds; sessions slide forward while actively used |
+| `bot_names` | `[]` | Player names manually flagged as fake players (lowercase); manual fallback on top of auto-detection |
 
 After login the browser receives an **HttpOnly + SameSite=Strict session cookie** (invisible to page scripts and never sent on cross-site requests), valid for 30 days by default. Active use keeps sliding the expiry forward, so normal usage does not require repeated logins. The "log out" button ends the session immediately; clearing `token_secret` also invalidates every session at once.
 
@@ -177,6 +178,7 @@ The dashboard has full control over your server — arbitrary commands, bans, co
 - **World seed, name and difficulty are read from save files**, which only update when the server writes them to disk — they can lag reality by minutes
 - **Player IPs and UUIDs are parsed from server output**, so unusual log formats may prevent capture. Players recovered after a plugin reload have no join time or IP
 - **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only
+- **Bot detection**: precise on online-mode servers (Carpet bots always use the offline-mode UUID). On offline-mode servers real players share the offline UUID scheme, so usercache / IP signals are combined — edge cases (e.g. `log-ips` disabled, cleared usercache) may misclassify, and `bot_names` is the manual fix
 - **Ping is unavailable on vanilla servers** and therefore not shown
 - The dashboard UI is currently Chinese-only
 
