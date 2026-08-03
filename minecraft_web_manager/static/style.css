@@ -130,6 +130,15 @@ input.field:focus, select.field:focus {
 .theme-toggle button:hover { color: var(--text); }
 .theme-toggle button.active { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-sm); }
 .theme-toggle svg { width: 16px; height: 16px; }
+.lang-toggle { display: inline-flex; gap: 2px; padding: 3px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--border); }
+.lang-toggle button {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 34px; height: 28px; padding: 0 .5rem; border: 0; border-radius: 7px;
+  background: transparent; color: var(--text-muted); font-size: .78rem; font-weight: 650;
+  transition: background .15s, color .15s;
+}
+.lang-toggle button:hover { color: var(--text); }
+.lang-toggle button.active { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-sm); }
 
 /* ============================================================
    App shell (console page)
@@ -389,7 +398,7 @@ input.field:focus, select.field:focus {
    Login page
    ============================================================ */
 .login-shell { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; position: relative; }
-.login-topright { position: absolute; top: 1.2rem; right: 1.2rem; }
+.login-topright { position: absolute; top: 1.2rem; right: 1.2rem; display: flex; align-items: center; gap: .5rem; }
 .login-card { width: min(410px, 100%); background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 2.2rem; box-shadow: var(--shadow-lg); }
 .login-card .brand { justify-content: center; margin-bottom: 1.4rem; padding: 0; }
 .login-card h1 { font-size: 1.45rem; text-align: center; letter-spacing: -.01em; }

@@ -122,7 +122,8 @@
     const tip = tooltipFor(svg);
     const hasData = series.some((s) => s.values.some((v) => v != null && isFinite(v)));
     if (!hasData) {
-      svg.innerHTML = `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" dominant-baseline="middle" class="chart-empty">暂无数据</text>`;
+      const emptyText = window.MWMI18N ? window.MWMI18N.t('chart_no_data') : '暂无数据';
+      svg.innerHTML = `<text x="${width / 2}" y="${height / 2}" text-anchor="middle" dominant-baseline="middle" class="chart-empty">${escapeHtml(emptyText)}</text>`;
       chart.geometry = null;
       if (tip) tip.hidden = true;
       return true;
@@ -175,7 +176,8 @@
       series.forEach((entry) => {
         const value = entry.values[hover];
         if (value == null || !isFinite(value)) {
-          rows.push(`<span class="key"><span class="swatch" style="background:${entry.color}"></span>${escapeHtml(entry.label)}<b>无数据</b></span>`);
+          const noValue = window.MWMI18N ? window.MWMI18N.t('chart_no_value') : '无数据';
+          rows.push(`<span class="key"><span class="swatch" style="background:${entry.color}"></span>${escapeHtml(entry.label)}<b>${escapeHtml(noValue)}</b></span>`);
           return;
         }
         parts.push(`<circle cx="${x.toFixed(1)}" cy="${yFor(value).toFixed(1)}" r="3.5" style="fill:${entry.color}" class="chart-dot"/>`);

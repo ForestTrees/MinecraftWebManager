@@ -1,10 +1,14 @@
 const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false };
 const $ = (id) => document.getElementById(id);
+const T = (key, params) => (window.MWMI18N ? window.MWMI18N.t(key, params) : key);
 
-const VIEW_TITLES = { console: '实时控制台', players: '玩家管理', world: 'World', performance: '服务器状态' };
+function viewTitle(view) {
+  const keys = { console: 'nav_console', players: 'nav_players', world: 'nav_world', performance: 'nav_performance' };
+  return T(keys[view] || 'crumb');
+}
 
 // server.properties: zh-CN labels; keys not listed fall back to the raw key name.
-const PROPERTY_LABELS = {
+const PROPERTY_LABELS_ZH = {
   'accepts-transfers': '接受跨服传送', 'allow-flight': '允许飞行',
   'allow-nether': '允许下界', 'broadcast-console-to-ops': '控制台命令广播给 OP',
   'broadcast-rcon-to-ops': 'RCON 命令广播给 OP', 'bug-report-link': '问题反馈链接',
@@ -43,6 +47,49 @@ const PROPERTY_LABELS = {
   'management-server-tls-keystore-password': '管理服务器 TLS 证书库密码',
   'management-server-allowed-origins': '管理服务器允许来源',
 };
+const PROPERTY_LABELS_EN = {
+  'accepts-transfers': 'Accept server transfers', 'allow-flight': 'Allow flight',
+  'allow-nether': 'Allow Nether', 'broadcast-console-to-ops': 'Broadcast console to OPs',
+  'broadcast-rcon-to-ops': 'Broadcast RCON to OPs', 'bug-report-link': 'Bug report link',
+  'chat-spam-threshold-seconds': 'Chat spam threshold (s)', 'command-spam-threshold-seconds': 'Command spam threshold (s)',
+  'difficulty': 'Difficulty', 'enable-code-of-conduct': 'Enable code of conduct',
+  'enable-command-block': 'Enable command blocks', 'enable-jmx-monitoring': 'Enable JMX monitoring',
+  'enable-query': 'Enable query protocol', 'enable-rcon': 'Enable RCON', 'enable-status': 'Respond to server list',
+  'enforce-secure-profile': 'Enforce secure chat signatures', 'enforce-whitelist': 'Enforce whitelist',
+  'entity-broadcast-range-percentage': 'Entity broadcast range (%)', 'force-gamemode': 'Force default gamemode',
+  'function-permission-level': 'Function permission level', 'gamemode': 'Default gamemode',
+  'generate-structures': 'Generate structures', 'generator-settings': 'World generator settings',
+  'hardcore': 'Hardcore', 'hide-online-players': 'Hide online players',
+  'initial-disabled-packs': 'Initial disabled packs', 'initial-enabled-packs': 'Initial enabled packs',
+  'level-name': 'World name', 'level-seed': 'World seed', 'level-type': 'World type',
+  'log-ips': 'Log player IPs', 'max-chained-neighbor-updates': 'Max chained neighbor updates',
+  'max-players': 'Max players', 'max-tick-time': 'Max tick time (ms)',
+  'max-world-size': 'Max world radius', 'motd': 'Server MOTD',
+  'network-compression-threshold': 'Network compression threshold', 'online-mode': 'Online mode',
+  'op-permission-level': 'OP permission level', 'pause-when-empty-seconds': 'Pause when empty (s)',
+  'player-idle-timeout': 'Player idle timeout (min)', 'prevent-proxy-connections': 'Prevent proxy connections',
+  'pvp': 'Allow PvP', 'query.port': 'Query port', 'rate-limit': 'Packet rate limit',
+  'rcon.password': 'RCON password', 'rcon.port': 'RCON port',
+  'region-file-compression': 'Region file compression', 'require-resource-pack': 'Require resource pack',
+  'resource-pack': 'Resource pack URL', 'resource-pack-id': 'Resource pack ID',
+  'resource-pack-prompt': 'Resource pack prompt', 'resource-pack-sha1': 'Resource pack SHA1',
+  'server-ip': 'Listen IP', 'server-port': 'Server port', 'simulation-distance': 'Simulation distance',
+  'spawn-monsters': 'Spawn monsters', 'spawn-protection': 'Spawn protection radius',
+  'status-heartbeat-interval': 'Status heartbeat interval', 'sync-chunk-writes': 'Sync chunk writes',
+  'text-filtering-config': 'Text filtering config', 'text-filtering-version': 'Text filtering version',
+  'use-native-transport': 'Use native transport', 'view-distance': 'View distance (chunks)',
+  'white-list': 'Enable whitelist',
+  'management-server-enabled': 'Enable management server', 'management-server-host': 'Management server host',
+  'management-server-port': 'Management server port', 'management-server-secret': 'Management server secret',
+  'management-server-tls-enabled': 'Management server TLS',
+  'management-server-tls-keystore': 'Management server TLS keystore',
+  'management-server-tls-keystore-password': 'Management server TLS keystore password',
+  'management-server-allowed-origins': 'Management server allowed origins',
+};
+function propertyLabel(key) {
+  const dict = (MWMI18N.getLang() === 'zh' ? PROPERTY_LABELS_ZH : PROPERTY_LABELS_EN);
+  return dict[key] || key;
+}
 const PROPERTY_OPTIONS = {
   difficulty: ['peaceful', 'easy', 'normal', 'hard'],
   gamemode: ['survival', 'creative', 'adventure', 'spectator'],
@@ -82,7 +129,7 @@ function formatBytes(value) { if (value == null) return '--'; const units = ['B'
 function formatDuration(seconds) {
   if (seconds == null) return '--';
   const h = Math.floor(seconds / 3600), m = Math.floor((seconds % 3600) / 60), s = Math.floor(seconds % 60);
-  return h > 0 ? `${h}时${m}分${s}秒` : m > 0 ? `${m}分${s}秒` : `${s}秒`;
+  return h > 0 ? T('dur_hms', { h, m, s }) : m > 0 ? T('dur_ms', { m, s }) : T('dur_s', { s });
 }
 function formatDateTime(epochSeconds) {
   if (!epochSeconds) return '--';
@@ -164,7 +211,7 @@ function showToast(message, { type = 'info' } = {}) {
   setTimeout(() => toast.remove(), 4000);
 }
 
-function confirmDialog(message, { title = '确认操作', confirmText = '确认' } = {}) {
+function confirmDialog(message, { title = T('confirm_title'), confirmText = T('confirm_ok') } = {}) {
   return new Promise((resolve) => {
     const overlay = $('confirm-modal');
     const confirmButton = $('confirm-modal-confirm');
@@ -203,10 +250,10 @@ function updateServerActionButtons(data) {
 function updateOverviewStatus(data) {
   const statusClass = data.running ? (data.startup ? 'running' : 'starting') : 'stopped';
   $('ov-server-dot').className = `status-dot ${statusClass}`;
-  $('ov-server-state-text').textContent = data.running ? (data.startup ? '运行中' : '启动中') : '已停止';
-  $('ov-server-version').textContent = data.minecraft_version || '版本未知';
+  $('ov-server-state-text').textContent = data.running ? (data.startup ? T('ov_state_running') : T('ov_state_starting')) : T('ov_state_stopped');
+  $('ov-server-version').textContent = data.minecraft_version || T('ov_version_unknown');
   $('ov-player-count').textContent = data.player_count;
-  $('ov-player-list').textContent = data.players.join(', ') || '暂无在线玩家';
+  $('ov-player-list').textContent = data.players.join(', ') || T('ov_no_players');
   $('ov-uptime').textContent = formatDuration(data.uptime_seconds);
   $('ov-mc-version').textContent = data.minecraft_version || '--';
   $('ov-mcdr-version').textContent = data.mcdr_version ? `MCDR ${data.mcdr_version}` : 'MCDR --';
@@ -217,7 +264,7 @@ function updateOverviewMetrics(data) {
   $('ov-tick').textContent = tick.tps != null || tick.mspt != null
     ? `${tick.tps != null ? tick.tps.toFixed(1) : '--'} / ${tick.mspt != null ? tick.mspt.toFixed(1) + 'ms' : '--'}`
     : '--';
-  $('ov-tps-hint').textContent = tick.available ? '来自 RCON tick query' : 'RCON 未启用/无数据';
+  $('ov-tps-hint').textContent = tick.available ? T('ov_tps_from_rcon') : T('ov_tps_unavailable');
   updatePerformanceTab(data);
 }
 
@@ -236,10 +283,10 @@ function updatePerformanceTab(data) {
   const system = data.system, tick = data.tick || {};
   $('perf-swap').textContent = `${formatBytes(system.swap_used)} / ${formatBytes(system.swap_total)}`;
   $('perf-disk').textContent = `${formatBytes(system.disk_used)} / ${formatBytes(system.disk_total)}`;
-  $('perf-load').textContent = system.load_average ? system.load_average.map((v) => v.toFixed(2)).join(' / ') : '不支持';
+  $('perf-load').textContent = system.load_average ? system.load_average.map((v) => v.toFixed(2)).join(' / ') : T('perf_unsupported');
   $('perf-tps').textContent = tick.tps != null ? tick.tps.toFixed(1) : '--';
   $('perf-mspt').textContent = tick.mspt != null ? `${tick.mspt.toFixed(1)} ms` : '--';
-  $('perf-tick-raw').innerHTML = formatMinecraftText(tick.raw || (tick.available ? '(空响应)' : 'RCON 未启用或未安装 tick 查询支持（如 Carpet）'));
+  $('perf-tick-raw').innerHTML = formatMinecraftText(tick.raw || (tick.available ? T('tick_empty') : T('tick_unavailable')));
 }
 
 /* ---------- resource charts ---------- */
@@ -271,10 +318,10 @@ function drawCharts() {
     ...shared,
     yMax: 100,
     formatValue: formatPercent,
-    series: [{ label: '总 CPU', color: 'var(--chart-1)', values: data.cpu }],
+    series: [{ label: T('chart_cpu_total'), color: 'var(--chart-1)', values: data.cpu }],
   });
   $('legend-cpu').innerHTML = legendHtml([
-    { label: '总 CPU', color: 'var(--chart-1)', value: cpuNow != null ? `${cpuNow.toFixed(1)}%` : '--' },
+    { label: T('chart_cpu_total'), color: 'var(--chart-1)', value: cpuNow != null ? `${cpuNow.toFixed(1)}%` : '--' },
   ]);
 
   const memNow = latest(data.mem_used);
@@ -283,13 +330,13 @@ function drawCharts() {
     ...shared,
     formatValue: formatBytes,
     series: [
-      { label: '系统已用', color: 'var(--chart-2)', values: data.mem_used },
-      { label: 'Minecraft', color: 'var(--chart-1)', values: data.mc_mem },
+      { label: T('chart_mem_system'), color: 'var(--chart-2)', values: data.mem_used },
+      { label: T('chart_mem_mc'), color: 'var(--chart-1)', values: data.mc_mem },
     ],
   });
   $('legend-memory').innerHTML = legendHtml([
-    { label: '系统已用', color: 'var(--chart-2)', value: memNow != null ? formatBytes(memNow) : '--' },
-    { label: 'Minecraft', color: 'var(--chart-1)', value: mcMemNow != null ? formatBytes(mcMemNow) : '--' },
+    { label: T('chart_mem_system'), color: 'var(--chart-2)', value: memNow != null ? formatBytes(memNow) : '--' },
+    { label: T('chart_mem_mc'), color: 'var(--chart-1)', value: mcMemNow != null ? formatBytes(mcMemNow) : '--' },
   ]);
 
   const rxNow = latest(data.net_rx);
@@ -298,18 +345,19 @@ function drawCharts() {
     ...shared,
     formatValue: formatRate,
     series: [
-      { label: '接收', color: 'var(--chart-3)', values: data.net_rx },
-      { label: '发送', color: 'var(--chart-4)', values: data.net_tx },
+      { label: T('chart_rx'), color: 'var(--chart-3)', values: data.net_rx },
+      { label: T('chart_tx'), color: 'var(--chart-4)', values: data.net_tx },
     ],
   });
   $('legend-network').innerHTML = legendHtml([
-    { label: '接收', color: 'var(--chart-3)', value: rxNow != null ? formatRate(rxNow) : '--' },
-    { label: '发送', color: 'var(--chart-4)', value: txNow != null ? formatRate(txNow) : '--' },
+    { label: T('chart_rx'), color: 'var(--chart-3)', value: rxNow != null ? formatRate(rxNow) : '--' },
+    { label: T('chart_tx'), color: 'var(--chart-4)', value: txNow != null ? formatRate(txNow) : '--' },
   ]);
 
+  const locale = MWMI18N.getLang() === 'zh' ? 'zh-CN' : 'en-US';
   const coverage = data.first_sample_at
-    ? `历史起点 ${new Date(data.first_sample_at * 1000).toLocaleString('zh-CN')}，采样间隔 1 秒；曲线按 ${Math.round(data.resolution_seconds)} 秒聚合。历史保存在内存中，插件重载或 MCDR 重启后会清空。`
-    : '尚未采集到数据。';
+    ? T('coverage_yes', { date: new Date(data.first_sample_at * 1000).toLocaleString(locale), n: Math.round(data.resolution_seconds) })
+    : T('coverage_no');
   $('chart-coverage').textContent = coverage;
 }
 
@@ -328,27 +376,30 @@ document.querySelectorAll('#range-picker button').forEach((button) => button.add
 window.addEventListener('resize', () => { if (state.activeView === 'performance') drawCharts(); });
 
 /* ---------- players roster + moderation ---------- */
-const ACTION_LABELS = {
-  op: '设为 OP', deop: '取消 OP', kick: '踢出', ban: '封禁', pardon: '解封',
-  ban_ip: '封禁 IP', pardon_ip: '解封 IP',
-  whitelist_add: '加入白名单', whitelist_remove: '移出白名单',
-  whitelist_on: '开启白名单', whitelist_off: '关闭白名单', whitelist_reload: '重载白名单',
+const ACTION_LABEL_KEYS = {
+  op: 'action_op', deop: 'action_deop', kick: 'action_kick', ban: 'action_ban', pardon: 'action_pardon',
+  ban_ip: 'action_ban_ip', pardon_ip: 'action_pardon_ip',
+  whitelist_add: 'action_whitelist_add', whitelist_remove: 'action_whitelist_remove',
+  whitelist_on: 'action_whitelist_on', whitelist_off: 'action_whitelist_off', whitelist_reload: 'action_whitelist_reload',
 };
+function actionLabel(action) {
+  return T(ACTION_LABEL_KEYS[action] || '') || action;
+}
 
 async function performPlayerAction(action, target, reason) {
-  const label = ACTION_LABELS[action] || action;
+  const label = actionLabel(action);
   const subject = target ? `${label} ${target}` : label;
-  const confirmed = await confirmDialog(`确认要${subject}吗？`, { title: label, confirmText: label });
+  const confirmed = await confirmDialog(T('confirm_action', { subject }), { title: label, confirmText: label });
   if (!confirmed) return;
   try {
     const response = await api('/api/players/action', {
       method: 'POST',
       body: JSON.stringify({ action, target: target || null, reason: reason || null }),
     });
-    showToast(response.result ? `${label}：${response.result}` : `${label} 已提交`);
+    showToast(response.result ? T('toast_result', { label, result: response.result }) : T('toast_submitted', { label }));
     refreshRoster();
   } catch (error) {
-    showToast(`${label}失败：${error.message}`, { type: 'error' });
+    showToast(T('toast_failed', { label, error: error.message }), { type: 'error' });
   }
 }
 
@@ -357,26 +408,26 @@ function sortRoster(players) {
   return players.slice().sort((a, b) => {
     if (a.online !== b.online) return a.online ? -1 : 1;
     if (a.op !== b.op) return a.op ? -1 : 1;
-    return String(a.name || a.uuid).localeCompare(String(b.name || b.uuid), 'zh-CN');
+    return String(a.name || a.uuid).localeCompare(String(b.name || b.uuid), MWMI18N.getLang() === 'zh' ? 'zh-CN' : 'en');
   });
 }
 
 function rosterActionsHtml(player, isBot = false) {
-  if (!player.name) return '<span class="na">无名称</span>';
+  if (!player.name) return `<span class="na">${T('roster_no_name')}</span>`;
   const name = escapeHtml(player.name);
   const buttons = [];
   if (!isBot) {
     // Bots are not real accounts: OP / whitelist management is meaningless for them.
-    buttons.push(`<button class="link-btn" data-player-action="${player.op ? 'deop' : 'op'}" data-target="${name}">${player.op ? '取消 OP' : '设为 OP'}</button>`);
-    buttons.push(`<button class="link-btn" data-player-action="${player.whitelisted ? 'whitelist_remove' : 'whitelist_add'}" data-target="${name}">${player.whitelisted ? '移出白名单' : '加入白名单'}</button>`);
+    buttons.push(`<button class="link-btn" data-player-action="${player.op ? 'deop' : 'op'}" data-target="${name}">${player.op ? T('action_deop') : T('action_op')}</button>`);
+    buttons.push(`<button class="link-btn" data-player-action="${player.whitelisted ? 'whitelist_remove' : 'whitelist_add'}" data-target="${name}">${player.whitelisted ? T('action_whitelist_remove') : T('action_whitelist_add')}</button>`);
   }
-  if (player.online) buttons.push(`<button class="link-btn" data-player-action="kick" data-target="${name}">踢出</button>`);
-  buttons.push(`<button class="link-btn danger" data-player-action="${player.banned ? 'pardon' : 'ban'}" data-target="${name}">${player.banned ? '解封' : '封禁'}</button>`);
-  buttons.push(`<button class="link-btn danger" data-player-action="ban_ip" data-target="${escapeHtml(player.ip || player.name)}">封 IP</button>`);
+  if (player.online) buttons.push(`<button class="link-btn" data-player-action="kick" data-target="${name}">${T('action_kick')}</button>`);
+  buttons.push(`<button class="link-btn danger" data-player-action="${player.banned ? 'pardon' : 'ban'}" data-target="${name}">${player.banned ? T('action_pardon') : T('action_ban')}</button>`);
+  buttons.push(`<button class="link-btn danger" data-player-action="ban_ip" data-target="${escapeHtml(player.ip || player.name)}">${T('action_ban_ip')}</button>`);
   if (!isBot) {
-    buttons.push(`<button class="link-btn" data-bot-flag="1" data-target="${name}">标记为假人</button>`);
+    buttons.push(`<button class="link-btn" data-bot-flag="1" data-target="${name}">${T('mark_bot')}</button>`);
   } else {
-    buttons.push(`<button class="link-btn" data-bot-flag="0" data-target="${name}">取消标记</button>`);
+    buttons.push(`<button class="link-btn" data-bot-flag="0" data-target="${name}">${T('unmark_bot')}</button>`);
   }
   return `<div class="row-actions">${buttons.join('')}</div>`;
 }
@@ -384,21 +435,21 @@ function rosterActionsHtml(player, isBot = false) {
 function rosterRowHtml(p, isBot) {
   const marks = [];
   if (p.is_bot) {
-    const sourceHint = p.bot_source === 'manual' ? '手动标记' : (p.bot_source === 'pattern' ? '名称规则' : 'UUID 识别');
-    marks.push(`<span class="tag bot" title="${sourceHint}">假人</span>`);
+    const sourceHint = p.bot_source === 'manual' ? T('bot_source_manual') : (p.bot_source === 'pattern' ? T('bot_source_pattern') : T('bot_source_uuid'));
+    marks.push(`<span class="tag bot" title="${escapeHtml(sourceHint)}">${T('bots_tag')}</span>`);
   }
-  if (p.whitelisted) marks.push('<span class="tag muted">白名单</span>');
-  if (p.banned) marks.push(`<span class="tag danger" title="${escapeHtml(p.ban_reason || '')}">已封禁</span>`);
-  if (!p.has_played) marks.push('<span class="tag muted">未进入过</span>');
+  if (p.whitelisted) marks.push(`<span class="tag muted">${T('tag_whitelisted')}</span>`);
+  if (p.banned) marks.push(`<span class="tag danger" title="${escapeHtml(p.ban_reason || '')}">${T('tag_banned')}</span>`);
+  if (!p.has_played) marks.push(`<span class="tag muted">${T('tag_never_played')}</span>`);
   // online but no recorded join time -> recovered after a plugin reload
-  const onlineDuration = p.joined_at ? formatDuration(p.online_seconds) : '<span class="na" title="插件重载后无法得知加入时间">在线中</span>';
-  const lastSeen = p.online ? '<span class="tag">在线</span>' : (p.last_seen ? formatDateTime(p.last_seen) : '<span class="na">未知</span>');
+  const onlineDuration = p.joined_at ? formatDuration(p.online_seconds) : `<span class="na" title="${T('title_join_unknown')}">${T('online_recovered')}</span>`;
+  const lastSeen = p.online ? `<span class="tag">${T('status_online')}</span>` : (p.last_seen ? formatDateTime(p.last_seen) : `<span class="na">${T('unknown')}</span>`);
   return `
     <tr>
-      <td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name">${escapeHtml(p.name || '(未知)')}</span></td>
-      <td>${p.online ? '<span class="tag">在线</span>' : '<span class="tag muted">离线</span>'}</td>
+      <td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name">${escapeHtml(p.name || T('unknown_name'))}</span></td>
+      <td>${p.online ? `<span class="tag">${T('status_online')}</span>` : `<span class="tag muted">${T('status_offline')}</span>`}</td>
       <td>${marks.join(' ') || '<span class="na">--</span>'}</td>
-      <td class="mono">${escapeHtml(p.ip || (p.online ? '未知' : '--'))}</td>
+      <td class="mono">${escapeHtml(p.ip || (p.online ? T('unknown') : '--'))}</td>
       <td>${p.online ? onlineDuration : '--'}</td>
       <td>${lastSeen}</td>
       <td>${escapeHtml(p.dimension || '--')}</td>
@@ -411,7 +462,7 @@ function rosterRowHtml(p, isBot) {
 function renderRoster(players) {
   const bots = players.filter((p) => p.is_bot);
   const humans = players.filter((p) => !p.is_bot);
-  const emptyRow = '<tr><td colspan="10">暂无玩家记录</td></tr>';
+  const emptyRow = `<tr><td colspan="10">${T('roster_no_players')}</td></tr>`;
   if (!players.length) {
     $('players-table-body').innerHTML = emptyRow;
     $('bots-section-head').hidden = true;
@@ -428,7 +479,7 @@ function renderRoster(players) {
     $('players-bots-body').innerHTML = sortRoster(bots).map((p) => rosterRowHtml(p, true)).join('');
     $('bots-table-scroll').hidden = !state.botsExpanded;
     $('bots-chevron').textContent = state.botsExpanded ? '▾' : '▸';
-    $('bots-toggle-hint').textContent = state.botsExpanded ? '点击收起' : '点击展开';
+    $('bots-toggle-hint').textContent = state.botsExpanded ? T('bots_collapse') : T('bots_expand');
   } else {
     $('bots-section-head').hidden = true;
     $('bots-table-scroll').hidden = true;
@@ -443,7 +494,7 @@ async function refreshRoster() {
     renderRoster(data.players || []);
     renderAccess(data);
   } catch (error) {
-    $('players-table-body').innerHTML = `<tr><td colspan="10">读取失败：${escapeHtml(error.message)}</td></tr>`;
+    $('players-table-body').innerHTML = `<tr><td colspan="10">${escapeHtml(T('load_failed', { error: error.message }))}</td></tr>`;
     $('bots-section-head').hidden = true;
     $('bots-table-scroll').hidden = true;
     $('players-bots-body').innerHTML = '';
@@ -451,12 +502,12 @@ async function refreshRoster() {
 }
 
 function accessListHtml(entries, describe, removeAction, targetOf) {
-  if (!entries.length) return '<li class="empty">暂无记录</li>';
+  if (!entries.length) return `<li class="empty">${T('no_entries')}</li>`;
   return entries.map((entry) => {
     const target = targetOf(entry);
     return `<li>
       <div class="access-entry">${describe(entry)}</div>
-      ${target ? `<button class="link-btn danger" data-player-action="${removeAction}" data-target="${escapeHtml(target)}">移除</button>` : ''}
+      ${target ? `<button class="link-btn danger" data-player-action="${removeAction}" data-target="${escapeHtml(target)}">${T('remove')}</button>` : ''}
     </li>`;
   }).join('');
 }
@@ -466,26 +517,26 @@ function renderAccess(data) {
     const toggle = $('whitelist-toggle');
     // Only sync the control when the user is not mid-interaction with it.
     if (document.activeElement !== toggle) toggle.checked = enabled;
-    $('whitelist-state').textContent = `白名单：${enabled ? '已开启' : '已关闭'}`;
+    $('whitelist-state').textContent = enabled ? T('whitelist_enabled') : T('whitelist_disabled');
     $('whitelist-hint').textContent = enabled
-      ? (data.whitelist_enforced ? '仅名单内玩家可进入，且已强制踢出名单外在线玩家' : '仅名单内玩家可进入服务器')
-      : '当前任何玩家都可以进入服务器';
+      ? (data.whitelist_enforced ? T('wl_enforced_hint') : T('wl_plain_hint'))
+      : T('wl_off_hint');
 
     $('access-whitelist').innerHTML = accessListHtml(
       data.whitelist || [],
-      (e) => `<span class="player-name">${escapeHtml(e.name || '(未知)')}</span><span class="access-meta mono">${escapeHtml(e.uuid || '')}</span>`,
+      (e) => `<span class="player-name">${escapeHtml(e.name || T('unknown_name'))}</span><span class="access-meta mono">${escapeHtml(e.uuid || '')}</span>`,
       'whitelist_remove', (e) => e.name);
     $('access-ops').innerHTML = accessListHtml(
       data.ops || [],
-      (e) => `<span class="player-name">${escapeHtml(e.name || '(未知)')}</span><span class="access-meta">等级 ${escapeHtml(e.level ?? '-')}</span>`,
+      (e) => `<span class="player-name">${escapeHtml(e.name || T('unknown_name'))}</span><span class="access-meta">${escapeHtml(T('level_prefix', { level: e.level ?? '-' }))}</span>`,
       'deop', (e) => e.name);
     $('access-bans').innerHTML = accessListHtml(
       data.banned_players || [],
-      (e) => `<span class="player-name">${escapeHtml(e.name || '(未知)')}</span><span class="access-meta">${escapeHtml(e.reason || '无理由')}</span>`,
+      (e) => `<span class="player-name">${escapeHtml(e.name || T('unknown_name'))}</span><span class="access-meta">${escapeHtml(e.reason || T('no_reason'))}</span>`,
       'pardon', (e) => e.name);
     $('access-ip-bans').innerHTML = accessListHtml(
       data.banned_ips || [],
-      (e) => `<span class="player-name mono">${escapeHtml(e.ip || '')}</span><span class="access-meta">${escapeHtml(e.reason || '无理由')}</span>`,
+      (e) => `<span class="player-name mono">${escapeHtml(e.ip || '')}</span><span class="access-meta">${escapeHtml(e.reason || T('no_reason'))}</span>`,
       'pardon_ip', (e) => e.ip);
 }
 
@@ -500,24 +551,25 @@ document.addEventListener('click', (event) => {
     state.botsExpanded = !state.botsExpanded;
     $('bots-table-scroll').hidden = !state.botsExpanded;
     $('bots-chevron').textContent = state.botsExpanded ? '▾' : '▸';
-    $('bots-toggle-hint').textContent = state.botsExpanded ? '点击收起' : '点击展开';
+    $('bots-toggle-hint').textContent = state.botsExpanded ? T('bots_collapse') : T('bots_expand');
   }
   const flagButton = event.target.closest('[data-bot-flag]');
   if (flagButton) setBotFlag(flagButton.dataset.target || '', flagButton.dataset.botFlag === '1');
 });
 async function setBotFlag(target, isBot) {
-  const verb = isBot ? '标记为假人' : '取消假人标记';
+  const verb = isBot ? T('mark_bot') : T('unmark_bot_verb');
+  const note = isBot ? T('bot_flag_confirm_yes') : T('bot_flag_confirm_no');
   const confirmed = await confirmDialog(
-    `确认要${verb}「${target}」吗？${isBot ? '该玩家将移入假人管理表格。' : '该玩家将永久按真人处理，名称规则不再对其生效。'}`,
+    `${T('bot_flag_confirm', { verb, target })}${note}`,
     { title: verb, confirmText: verb }
   );
   if (!confirmed) return;
   try {
     await api('/api/players/bot', { method: 'POST', body: JSON.stringify({ name: target, is_bot: isBot }) });
-    showToast(`${verb}成功：${target}`);
+    showToast(T('bot_flag_done', { verb, target }));
     refreshRoster();
   } catch (error) {
-    showToast(`${verb}失败：${error.message}`, { type: 'error' });
+    showToast(T('bot_flag_failed', { verb, error: error.message }), { type: 'error' });
   }
 }
 document.querySelectorAll('[data-access-action]').forEach((button) => button.addEventListener('click', () => {
@@ -545,11 +597,11 @@ function propertyControl(entry) {
   const key = entry.key;
   const id = `prop-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
   if (entry.sensitive) {
-    const hint = entry.has_value ? '已设置，留空保持不变' : '未设置';
+    const hint = entry.has_value ? T('prop_set_hint') : T('prop_not_set');
     return `<input id="${id}" class="field" type="password" data-prop="${escapeHtml(key)}" placeholder="${hint}" autocomplete="new-password" />`;
   }
   if (entry.value === 'true' || entry.value === 'false') {
-    return `<label class="switch"><input id="${id}" type="checkbox" data-prop="${escapeHtml(key)}" ${entry.value === 'true' ? 'checked' : ''} /><span>${entry.value === 'true' ? '启用' : '停用'}</span></label>`;
+    return `<label class="switch"><input id="${id}" type="checkbox" data-prop="${escapeHtml(key)}" ${entry.value === 'true' ? 'checked' : ''} /><span>${entry.value === 'true' ? T('prop_on') : T('prop_off')}</span></label>`;
   }
   const options = PROPERTY_OPTIONS[key];
   if (options) {
@@ -567,17 +619,17 @@ function renderProperties() {
   const filter = ($('properties-filter').value || '').trim().toLowerCase();
   const rows = propertiesState.entries.filter((entry) => {
     if (!filter) return true;
-    const label = PROPERTY_LABELS[entry.key] || '';
+    const label = propertyLabel(entry.key) || '';
     return entry.key.toLowerCase().includes(filter) || label.toLowerCase().includes(filter);
   });
   if (!rows.length) {
-    $('properties-list').innerHTML = '<p class="hint">没有匹配的配置项。</p>';
+    $('properties-list').innerHTML = `<p class="hint">${T('prop_none')}</p>`;
     return;
   }
   $('properties-list').innerHTML = rows.map((entry) => `
     <div class="property-row${propertiesState.dirty.has(entry.key) ? ' dirty' : ''}">
       <div class="property-label">
-        <span class="property-name">${escapeHtml(PROPERTY_LABELS[entry.key] || entry.key)}</span>
+        <span class="property-name">${escapeHtml(propertyLabel(entry.key))}</span>
         <span class="property-key mono">${escapeHtml(entry.key)}</span>
       </div>
       <div class="property-control">${propertyControl(entry)}</div>
@@ -596,7 +648,7 @@ function markDirty(key, value) {
   }
   $('properties-save').disabled = propertiesState.dirty.size === 0;
   $('properties-save').textContent = propertiesState.dirty.size
-    ? `保存修改 (${propertiesState.dirty.size})` : '保存修改';
+    ? T('save_count', { n: propertiesState.dirty.size }) : T('save_changes');
 }
 
 $('properties-list').addEventListener('input', (event) => {
@@ -606,7 +658,7 @@ $('properties-list').addEventListener('input', (event) => {
   markDirty(field.dataset.prop, value);
   if (field.type === 'checkbox') {
     const text = field.parentElement.querySelector('span');
-    if (text) text.textContent = field.checked ? '启用' : '停用';
+    if (text) text.textContent = field.checked ? T('prop_on') : T('prop_off');
   }
 });
 $('properties-list').addEventListener('change', (event) => {
@@ -619,19 +671,19 @@ $('properties-save').addEventListener('click', async () => {
   if (!propertiesState.dirty.size) return;
   const changes = Object.fromEntries(propertiesState.dirty);
   const confirmed = await confirmDialog(
-    `将修改 ${Object.keys(changes).length} 项配置，需要重启服务端才会生效。确认保存吗？`,
-    { title: '保存服务器配置', confirmText: '保存' });
+    T('save_confirm', { n: Object.keys(changes).length }),
+    { title: T('save_title'), confirmText: T('save') });
   if (!confirmed) return;
   try {
     const result = await api('/api/server/properties', { method: 'POST', body: JSON.stringify({ changes }) });
     propertiesState.dirty.clear();
     $('properties-save').disabled = true;
-    $('properties-save').textContent = '保存修改';
-    const ignored = result.ignored && result.ignored.length ? `，已忽略未知项：${result.ignored.join(', ')}` : '';
-    showToast(`已保存 ${result.applied.length} 项${ignored}；重启服务端后生效`);
+    $('properties-save').textContent = T('save_changes');
+    const ignored = result.ignored && result.ignored.length ? T('saved_ignored', { list: result.ignored.join(', ') }) : '';
+    showToast(T('saved_ok', { n: result.applied.length, ignored }));
     refreshProperties();
   } catch (error) {
-    showToast(`保存失败：${error.message}`, { type: 'error' });
+    showToast(T('save_failed', { error: error.message }), { type: 'error' });
   }
 });
 
@@ -641,22 +693,22 @@ async function refreshProperties() {
     propertiesState.entries = data.entries || [];
     propertiesState.dirty.clear();
     $('properties-save').disabled = true;
-    $('properties-save').textContent = '保存修改';
+    $('properties-save').textContent = T('save_changes');
     renderProperties();
   } catch (error) {
-    $('properties-list').innerHTML = `<p class="hint">读取失败：${escapeHtml(error.message)}</p>`;
+    $('properties-list').innerHTML = `<p class="hint">${escapeHtml(T('load_failed', { error: error.message }))}</p>`;
   }
 }
 
 /* ---------- plugins + mods ---------- */
 function renderPlugins(plugins) {
-  $('plugins-count').textContent = `${plugins.length} 个`;
+  $('plugins-count').textContent = T('plugins_count', { n: plugins.length });
   $('plugins').innerHTML = plugins.map((p) => {
     // Reloading this very plugin would stop the web server mid-request; that flow
     // only works from the MCDR console.
     const reloadButton = p.self
-      ? '<span class="na">当前插件</span>'
-      : `<button class="link-btn row-hover-action" data-reload-plugin="${escapeHtml(p.id)}" type="button">重新加载</button>`;
+      ? `<span class="na">${T('current_plugin')}</span>`
+      : `<button class="link-btn row-hover-action" data-reload-plugin="${escapeHtml(p.id)}" type="button">${T('reload')}</button>`;
     return `
     <li class="entry-row">
       <div>
@@ -665,22 +717,22 @@ function renderPlugins(plugins) {
       </div>
       ${reloadButton}
     </li>`;
-  }).join('') || '<li>无已加载插件</li>';
+  }).join('') || `<li>${T('no_plugins')}</li>`;
 }
 
 async function refreshMods() {
   try {
     const { mods } = await api('/api/mods');
-    $('mods-count').textContent = `${mods.length} 个`;
+    $('mods-count').textContent = T('plugins_count', { n: mods.length });
     $('mods').innerHTML = mods.map((m) => `
       <li class="entry-row">
         <div>
           <div class="p-name">${escapeHtml(m.name || m.file)}</div>
           <div class="p-meta">${escapeHtml(m.id || m.file)}${m.version ? ' · ' + escapeHtml(m.version) : ''}</div>
         </div>
-      </li>`).join('') || '<li>mods 目录为空</li>';
+      </li>`).join('') || `<li>${T('no_mods')}</li>`;
   } catch (error) {
-    $('mods').innerHTML = `<li>读取失败：${escapeHtml(error.message)}</li>`;
+    $('mods').innerHTML = `<li>${escapeHtml(T('load_failed', { error: error.message }))}</li>`;
   }
 }
 
@@ -688,14 +740,14 @@ document.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-reload-plugin]');
   if (!button) return;
   const pluginId = button.dataset.reloadPlugin;
-  const confirmed = await confirmDialog(`确认要重新加载插件 ${pluginId} 吗？`, { title: '重载插件', confirmText: '重载' });
+  const confirmed = await confirmDialog(T('reload_plugin_confirm', { id: pluginId }), { title: T('reload_plugin_title'), confirmText: T('reload') });
   if (!confirmed) return;
   try {
     const result = await api('/api/plugins/reload', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
-    showToast(result.accepted ? `插件 ${pluginId} 已重载` : `插件 ${pluginId} 重载未生效`, { type: result.accepted ? 'info' : 'error' });
+    showToast(result.accepted ? T('plugin_reloaded', { id: pluginId }) : T('plugin_reload_noop', { id: pluginId }), { type: result.accepted ? 'info' : 'error' });
     refreshOverview();
   } catch (error) {
-    showToast(`重载失败：${error.message}`, { type: 'error' });
+    showToast(T('reload_failed', { error: error.message }), { type: 'error' });
   }
 });
 
@@ -719,7 +771,7 @@ async function refreshWorld() {
 
 function switchView(view) {
   state.activeView = view;
-  $('view-title').textContent = VIEW_TITLES[view] || '控制中心';
+  $('view-title').textContent = viewTitle(view);
   document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
   document.querySelectorAll('.view').forEach((panel) => panel.classList.toggle('active', panel.dataset.viewPanel === view));
   if (view === 'players') refreshRoster();
@@ -739,14 +791,14 @@ function connectSocket() {
   // The session cookie is sent automatically on the same-origin handshake.
   state.socket = new WebSocket(`${protocol}://${location.host}/ws/events`);
   state.socket.onopen = () => {
-    setConnection('实时已连接', 'live');
+    setConnection(T('conn_live'), 'live');
     // The server replays its console backlog on every (re)connect; reset first so a
     // reconnect repopulates from that backlog instead of duplicating existing lines.
     consoleLines.length = 0;
     $('console').textContent = '';
   };
   state.socket.onclose = () => {
-    setConnection('实时已断开', 'down');
+    setConnection(T('conn_down'), 'down');
     if (!state.loggedOut) setTimeout(connectSocket, 2000);
   };
   state.socket.onmessage = (message) => {
@@ -806,12 +858,12 @@ $('command-form').addEventListener('submit', async (event) => {
   if (!command) return;
   try {
     const response = await api('/api/commands', { method: 'POST', body: JSON.stringify({ command, transport: $('transport').value }) });
-    $('command-result').innerHTML = formatMinecraftText(response.result ?? '命令已提交；输出将出现在控制台。');
+    $('command-result').innerHTML = formatMinecraftText(response.result ?? T('cmd_submitted'));
     state.history.push(command);
     state.historyIndex = state.history.length;
     $('command').value = '';
   } catch (error) {
-    $('command-result').textContent = `发送失败：${error.message}`;
+    $('command-result').textContent = T('cmd_failed', { error: error.message });
   }
 });
 $('command').addEventListener('keydown', (event) => {
@@ -845,8 +897,8 @@ $('command').addEventListener('keydown', (event) => {
 /* ---------- server actions ---------- */
 document.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', async () => {
   const action = button.dataset.action;
-  const verb = action === 'stop' ? '停止' : action === 'restart' ? '重启' : '启动';
-  const confirmed = await confirmDialog(`确认要${verb}服务端吗？`, { title: `${verb}服务端`, confirmText: verb });
+  const verb = action === 'stop' ? T('action_stop') : action === 'restart' ? T('action_restart') : T('action_start');
+  const confirmed = await confirmDialog(T('action_confirm', { verb }), { title: T('action_title', { verb }), confirmText: verb });
   if (!confirmed) return;
   try {
     await api('/api/server/actions', { method: 'POST', body: JSON.stringify({ action }) });
@@ -856,6 +908,7 @@ document.querySelectorAll('[data-action]').forEach((button) => button.addEventLi
   }
 }));
 
+$('view-title').textContent = viewTitle('console');
 refreshOverview();
 refreshWorld();
 connectSocket();
@@ -869,3 +922,13 @@ setInterval(() => {
 setInterval(() => {
   if (state.activeView === 'performance') refreshCharts();
 }, 1000);
+
+// Re-render everything when the language is switched so generated strings follow.
+document.addEventListener('mwm:langchange', () => {
+  $('view-title').textContent = viewTitle(state.activeView);
+  refreshOverview();
+  refreshWorld();
+  if (state.activeView === 'players') refreshRoster();
+  if (state.activeView === 'world') { refreshProperties(); refreshMods(); }
+  if (state.activeView === 'performance') refreshCharts();
+});

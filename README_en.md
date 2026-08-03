@@ -6,7 +6,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serve
 
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
-- **Version**: 0.1.1
+- **Version**: 1.2.0
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `psutil`
 
@@ -48,6 +48,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 ### Other
 
 - Light / dark / follow-system themes, remembered across visits
+- UI language follows the browser automatically (Simplified / Traditional Chinese → Chinese, anything else → English), with a manual switcher on both pages that is remembered
 - Responsive layout that works on a phone browser
 
 ---
@@ -183,7 +184,7 @@ The dashboard has full control over your server — arbitrary commands, bans, co
 - **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only
 - **Bot detection**: classic Carpet bots are matched by their offline UUID. TIS/AMS/RMS-style extensions may give bots Mojang-resolved or random v4 UUIDs, which only name rules + usercache signals can catch. Name rules only apply to players with no usercache record; use `not_bot_names` or the per-row "unmark" action to force a real-player classification
 - **Ping is unavailable on vanilla servers** and therefore not shown
-- The dashboard UI is currently Chinese-only
+- The dashboard UI currently supports Simplified Chinese and English
 
 ---
 
