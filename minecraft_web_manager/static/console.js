@@ -1,4 +1,4 @@
-const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false };
+const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting' };
 const $ = (id) => document.getElementById(id);
 const T = (key, params) => (window.MWMI18N ? window.MWMI18N.t(key, params) : key);
 
@@ -432,31 +432,35 @@ function rosterActionsHtml(player, isBot = false) {
   return `<div class="row-actions">${buttons.join('')}</div>`;
 }
 
+function botSourceHint(p) {
+  return p.bot_source === 'manual' ? T('bot_source_manual') : (p.bot_source === 'pattern' ? T('bot_source_pattern') : T('bot_source_uuid'));
+}
+
 function rosterRowHtml(p, isBot) {
   const marks = [];
-  if (p.is_bot) {
-    const sourceHint = p.bot_source === 'manual' ? T('bot_source_manual') : (p.bot_source === 'pattern' ? T('bot_source_pattern') : T('bot_source_uuid'));
-    marks.push(`<span class="tag bot" title="${escapeHtml(sourceHint)}">${T('bots_tag')}</span>`);
-  }
   if (p.whitelisted) marks.push(`<span class="tag muted">${T('tag_whitelisted')}</span>`);
   if (p.banned) marks.push(`<span class="tag danger" title="${escapeHtml(p.ban_reason || '')}">${T('tag_banned')}</span>`);
   if (!p.has_played) marks.push(`<span class="tag muted">${T('tag_never_played')}</span>`);
   // online but no recorded join time -> recovered after a plugin reload
   const onlineDuration = p.joined_at ? formatDuration(p.online_seconds) : `<span class="na" title="${T('title_join_unknown')}">${T('online_recovered')}</span>`;
   const lastSeen = p.online ? `<span class="tag">${T('status_online')}</span>` : (p.last_seen ? formatDateTime(p.last_seen) : `<span class="na">${T('unknown')}</span>`);
-  return `
-    <tr>
-      <td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name">${escapeHtml(p.name || T('unknown_name'))}</span></td>
-      <td>${p.online ? `<span class="tag">${T('status_online')}</span>` : `<span class="tag muted">${T('status_offline')}</span>`}</td>
-      <td>${marks.join(' ') || '<span class="na">--</span>'}</td>
-      <td class="mono">${escapeHtml(p.ip || (p.online ? T('unknown') : '--'))}</td>
-      <td>${p.online ? onlineDuration : '--'}</td>
-      <td>${lastSeen}</td>
-      <td>${escapeHtml(p.dimension || '--')}</td>
-      <td class="mono">${p.position ? p.position.join(', ') : '--'}</td>
-      <td class="mono">${escapeHtml(p.uuid || '--')}</td>
-      <td>${rosterActionsHtml(p, isBot)}</td>
-    </tr>`;
+  // The bot table shows the detection source as a hover hint instead of a tags column.
+  const nameTitle = isBot && p.bot_source ? ` title="${escapeHtml(botSourceHint(p))}"` : '';
+  const playerCell = `<td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name"${nameTitle}>${escapeHtml(p.name || T('unknown_name'))}</span></td>`;
+  const statusCell = `<td>${p.online ? `<span class="tag">${T('status_online')}</span>` : `<span class="tag muted">${T('status_offline')}</span>`}</td>`;
+  const sessionCell = `<td>${p.online ? onlineDuration : '--'}</td>`;
+  const lastSeenCell = `<td>${lastSeen}</td>`;
+  const dimensionCell = `<td>${escapeHtml(p.dimension || '--')}</td>`;
+  const positionCell = `<td class="mono">${p.position ? p.position.join(', ') : '--'}</td>`;
+  const uuidCell = `<td class="mono">${escapeHtml(p.uuid || '--')}</td>`;
+  const actionsCell = `<td>${rosterActionsHtml(p, isBot)}</td>`;
+  if (isBot) {
+    // Bot table deliberately omits IP and tags columns.
+    return `<tr>${playerCell}${statusCell}${sessionCell}${lastSeenCell}${dimensionCell}${positionCell}${uuidCell}${actionsCell}</tr>`;
+  }
+  const tagsCell = `<td>${marks.join(' ') || '<span class="na">--</span>'}</td>`;
+  const ipCell = `<td class="mono">${escapeHtml(p.ip || (p.online ? T('unknown') : '--'))}</td>`;
+  return `<tr>${playerCell}${statusCell}${tagsCell}${ipCell}${sessionCell}${lastSeenCell}${dimensionCell}${positionCell}${uuidCell}${actionsCell}</tr>`;
 }
 
 function renderRoster(players) {
@@ -786,19 +790,25 @@ function setConnection(text, cls) {
   $('connection-text').textContent = text;
   $('connection').className = `badge ${cls}`;
 }
+function refreshConnectionText() {
+  const cls = state.conn === 'live' ? 'live' : state.conn === 'down' ? 'down' : '';
+  setConnection(T(`conn_${state.conn}`), cls);
+}
 function connectSocket() {
   const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
   // The session cookie is sent automatically on the same-origin handshake.
   state.socket = new WebSocket(`${protocol}://${location.host}/ws/events`);
   state.socket.onopen = () => {
-    setConnection(T('conn_live'), 'live');
+    state.conn = 'live';
+    refreshConnectionText();
     // The server replays its console backlog on every (re)connect; reset first so a
     // reconnect repopulates from that backlog instead of duplicating existing lines.
     consoleLines.length = 0;
     $('console').textContent = '';
   };
   state.socket.onclose = () => {
-    setConnection(T('conn_down'), 'down');
+    state.conn = 'down';
+    refreshConnectionText();
     if (!state.loggedOut) setTimeout(connectSocket, 2000);
   };
   state.socket.onmessage = (message) => {
@@ -909,6 +919,7 @@ document.querySelectorAll('[data-action]').forEach((button) => button.addEventLi
 }));
 
 $('view-title').textContent = viewTitle('console');
+refreshConnectionText();
 refreshOverview();
 refreshWorld();
 connectSocket();
@@ -926,6 +937,7 @@ setInterval(() => {
 // Re-render everything when the language is switched so generated strings follow.
 document.addEventListener('mwm:langchange', () => {
   $('view-title').textContent = viewTitle(state.activeView);
+  refreshConnectionText();
   refreshOverview();
   refreshWorld();
   if (state.activeView === 'players') refreshRoster();

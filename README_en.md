@@ -27,7 +27,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### Player management
 
-- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Detected Carpet fake players (bots) live in a separate "Bot management" table inside the same tab, collapsible and manually flaggable per row
+- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Detected Carpet fake players (bots) live in a separate "Bot management" table inside the same tab, collapsible and manually flaggable per row; the bot table is trimmed to player, status, session, last seen, dimension, position, UUID and actions (no IP/tags columns)
 - Per-player actions: op / deop, kick, ban, ban IP, add to / remove from whitelist
 - **Whitelist**: toggle enforcement, reload the list, add and remove entries
 - **Operators**: view, grant and revoke OP
