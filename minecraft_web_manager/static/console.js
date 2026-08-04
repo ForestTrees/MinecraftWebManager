@@ -619,7 +619,13 @@ function propertyControl(entry) {
   return `<input id="${id}" class="field" data-prop="${escapeHtml(key)}" value="${escapeHtml(entry.value)}" />`;
 }
 
+function updatePropertiesCount() {
+  const el = $('properties-count');
+  if (el) el.textContent = T('properties_count', { total: propertiesState.entries.length, modified: propertiesState.dirty.size });
+}
+
 function renderProperties() {
+  updatePropertiesCount();
   const filter = ($('properties-filter').value || '').trim().toLowerCase();
   const rows = propertiesState.entries.filter((entry) => {
     if (!filter) return true;
@@ -631,7 +637,7 @@ function renderProperties() {
     return;
   }
   $('properties-list').innerHTML = rows.map((entry) => `
-    <div class="property-row${propertiesState.dirty.has(entry.key) ? ' dirty' : ''}">
+    <div class="property-card${propertiesState.dirty.has(entry.key) ? ' dirty' : ''}">
       <div class="property-label">
         <span class="property-name">${escapeHtml(propertyLabel(entry.key))}</span>
         <span class="property-key mono">${escapeHtml(entry.key)}</span>
@@ -653,6 +659,7 @@ function markDirty(key, value) {
   $('properties-save').disabled = propertiesState.dirty.size === 0;
   $('properties-save').textContent = propertiesState.dirty.size
     ? T('save_count', { n: propertiesState.dirty.size }) : T('save_changes');
+  updatePropertiesCount();
 }
 
 $('properties-list').addEventListener('input', (event) => {

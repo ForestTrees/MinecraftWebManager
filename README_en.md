@@ -35,9 +35,8 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### World
 
-- **Server settings**: view and edit `server.properties` in the browser. Enumerated settings (difficulty, gamemode, …) render as dropdowns and the list is filterable. Saving rewrites only the keys you changed — comments and ordering are preserved
-- **Loaded plugins**: all MCDR plugins with versions, each individually reloadable
-- **Loaded mods**: Fabric mods in the server's `mods/` folder, named from their `fabric.mod.json`
+- **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted
+- **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder
 
 ### Server status
 
