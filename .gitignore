@@ -3,6 +3,7 @@ AGENTS.md
 TODO.md
 CLAUDE.md
 .claude/
+.DS_Store/
 
 # Python
 .venv/
