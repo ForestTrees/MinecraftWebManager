@@ -6,7 +6,7 @@
 
 面板由插件自身托管，无需另外部署 Web 服务器，也不依赖任何 CDN 或前端构建工具。
 
-- **版本**：1.2.0
+- **版本**：1.0.0
 - **依赖**：MCDReforged `>=2.15.0`、Python 3.10+
 - **Python 库**：`fastapi`、`uvicorn[standard]`、`psutil`
 
