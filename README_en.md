@@ -6,7 +6,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serve
 
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
-- **Version**: 1.0.0
+- **Version**: 1.0.1
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `psutil`
 
@@ -33,7 +33,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### World
 
-- **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted
+- **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
 - **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder
 
 ### Server status
@@ -102,6 +102,7 @@ The config file lives at `config/minecraft_web_manager/config.json` inside MCDR'
 | `password.salt` / `password.hash` | generated | PBKDF2 salt and hash. The password itself is never stored |
 | `token_secret` | generated | Signing key for login tokens. Clearing it invalidates every active session immediately |
 | `token_ttl_seconds` | `2592000` (30 days) | Login session lifetime in seconds; sessions slide forward while actively used |
+| `panel_title` | `MC Web Manager` | Panel brand title shown in the sidebar and browser tab (the login page title follows) |
 | `bot_names` | `[]` | Player names manually flagged as fake players (lowercase); manual fallback on top of auto-detection |
 | `not_bot_names` | `[]` | Reverse list (lowercase): forced to be treated as real players even if name rules or the offline UUID match; the per-row "unmark" button writes here |
 | `bot_name_patterns` | `["(?i)^bot[_-]"]` | Regex list for bot-like names; by default only applies to players **absent from usercache**, so a real player named `bot_XXX` is not misclassified |

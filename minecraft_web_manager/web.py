@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import html
 import mimetypes
 import threading
 import time
@@ -239,10 +240,16 @@ class WebService:
             ttl = DEFAULT_TOKEN_TTL_SECONDS
         return max(300, ttl)
 
+    def _render_page(self, filename: str) -> HTMLResponse:
+        """Serve a bundled HTML page with the configurable panel title injected."""
+        content = self.assets[filename][0].decode("utf-8")
+        panel_title = str(self.config.data.get("panel_title", "MC Web Manager"))
+        return HTMLResponse(content.replace("__MWM_PANEL_TITLE__", html.escape(panel_title)))
+
     def _build_app(self) -> FastAPI:
         # Interactive API docs are disabled: they were publicly reachable without
         # authentication and reveal the whole command surface of the panel.
-        app = FastAPI(title="Minecraft Web Manager", version="1.0.0", docs_url=None, openapi_url=None, redoc_url=None)
+        app = FastAPI(title="Minecraft Web Manager", version="1.0.1", docs_url=None, openapi_url=None, redoc_url=None)
 
         @app.middleware("http")
         async def renew_session(request: Request, call_next):
@@ -281,6 +288,16 @@ class WebService:
             content, media_type = found
             return Response(content, media_type=media_type)
 
+        @app.get("/favicon.ico", include_in_schema=False)
+        async def favicon_ico() -> Response:
+            # Browsers use the <link rel="icon"> SVG, but some clients still request the
+            # classic /favicon.ico path by default — serve the same logo there.
+            found = self.assets.get("favicon.svg")
+            if found is None:
+                raise HTTPException(status_code=404, detail="Not found")
+            content, media_type = found
+            return Response(content, media_type=media_type)
+
         @app.on_event("startup")
         async def app_started() -> None:
             self.hub.bind_loop(asyncio.get_running_loop())
@@ -307,11 +324,11 @@ class WebService:
             token = request.cookies.get(SESSION_COOKIE)
             if token and verify_token(self.config.data["token_secret"], token) is not None:
                 return RedirectResponse("/console")
-            return HTMLResponse(self.assets["login.html"][0])
+            return self._render_page("login.html")
 
         @app.get("/console", include_in_schema=False)
         async def console_page() -> HTMLResponse:
-            return HTMLResponse(self.assets["console.html"][0])
+            return self._render_page("console.html")
 
         @app.post("/api/auth/login")
         async def login(body: LoginRequest, request: Request) -> Response:

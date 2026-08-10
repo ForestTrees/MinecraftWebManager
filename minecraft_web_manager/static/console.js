@@ -600,6 +600,7 @@ const propertiesState = { entries: [], dirty: new Map() };
 function propertyControl(entry) {
   const key = entry.key;
   const id = `prop-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  if (entry.removed) return '<span class="na">--</span>';
   if (entry.sensitive) {
     const hint = entry.has_value ? T('prop_set_hint') : T('prop_not_set');
     return `<input id="${id}" class="field" type="password" data-prop="${escapeHtml(key)}" placeholder="${hint}" autocomplete="new-password" />`;
@@ -624,6 +625,14 @@ function updatePropertiesCount() {
   if (el) el.textContent = T('properties_count', { total: propertiesState.entries.length, modified: propertiesState.dirty.size });
 }
 
+function pendingLineHtml(entry) {
+  if (!entry.pending) return '';
+  if (entry.sensitive) return `<div class="property-pending">${T('prop_sensitive_changed')}</div>`;
+  if (entry.removed) return `<div class="property-pending">${escapeHtml(T('prop_deleted', { value: entry.effective ?? '--' }))}</div>`;
+  if (entry.effective == null) return `<div class="property-pending">${escapeHtml(T('prop_added', { value: entry.value ?? '' }))}</div>`;
+  return `<div class="property-pending">${escapeHtml(T('prop_diff', { old: entry.effective, new: entry.value ?? '' }))}</div>`;
+}
+
 function renderProperties() {
   updatePropertiesCount();
   const filter = ($('properties-filter').value || '').trim().toLowerCase();
@@ -636,14 +645,18 @@ function renderProperties() {
     $('properties-list').innerHTML = `<p class="hint">${T('prop_none')}</p>`;
     return;
   }
-  $('properties-list').innerHTML = rows.map((entry) => `
-    <div class="property-card${propertiesState.dirty.has(entry.key) ? ' dirty' : ''}">
+  $('properties-list').innerHTML = rows.map((entry) => {
+    const isDirty = propertiesState.dirty.has(entry.key);
+    return `
+    <div class="property-card${isDirty ? ' dirty' : ''}${entry.pending && !isDirty ? ' pending' : ''}">
       <div class="property-label">
-        <span class="property-name">${escapeHtml(propertyLabel(entry.key))}</span>
+        <span class="property-name">${escapeHtml(propertyLabel(entry.key))}${entry.pending ? `<span class="tag pending">${T('prop_pending')}</span>` : ''}</span>
         <span class="property-key mono">${escapeHtml(entry.key)}</span>
       </div>
+      ${pendingLineHtml(entry)}
       <div class="property-control">${propertyControl(entry)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 function markDirty(key, value) {

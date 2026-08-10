@@ -19,7 +19,7 @@ from mcdreforged.command.command_source import PluginCommandSource
 from mcdreforged.constants import core_constant
 from mcdreforged.minecraft.rtext.text import RTextBase
 
-from . import nbt, properties, roster
+from . import nbt, pending, properties, roster
 
 # Minecraft usernames are 1-16 of [A-Za-z0-9_]; anything else could smuggle a second
 # command (or arguments) into the console/RCON line, so targets are validated not escaped.
@@ -102,6 +102,9 @@ class MCDRBridge:
         self._tick_lock = threading.Lock()
         self._world_cache: tuple[tuple[tuple[str, int], ...], dict[str, Any]] | None = None
         self._world_lock = threading.Lock()
+        self.pending: pending.PendingProperties | None = None
+        self._instant_keys: set[str] = set()
+        self._instant_lock = threading.Lock()
 
     def call(self, operation: Callable[[], Any], timeout: float = 5.0) -> Any:
         """Run an operation on MCDR's TaskExecutor and wait from the web thread."""
@@ -233,22 +236,53 @@ class MCDRBridge:
             self._tick_cache = (now, report)
         return report
 
+    def _resolve_paths(self) -> tuple[Path, Path]:
+        """(server working directory, world save directory).
+
+        Only call this on MCDR's TaskExecutor thread (it touches MCDR config API).
+        """
+        mcdr_config = self.server.get_mcdr_config()
+        working_directory = Path(mcdr_config.get("working_directory", "server"))
+        level_name = "world"
+        properties_path = working_directory / "server.properties"
+        if properties_path.exists():
+            for line in properties_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                if line.strip().startswith("level-name="):
+                    level_name = line.split("=", 1)[1].strip() or level_name
+                    break
+        return working_directory, working_directory / level_name
+
     def _paths(self) -> tuple[Path, Path]:
         """(server working directory, world save directory), resolved on MCDR's thread."""
+        return self.call(self._resolve_paths)
 
-        def resolve() -> tuple[Path, Path]:
-            mcdr_config = self.server.get_mcdr_config()
-            working_directory = Path(mcdr_config.get("working_directory", "server"))
-            level_name = "world"
-            properties_path = working_directory / "server.properties"
-            if properties_path.exists():
-                for line in properties_path.read_text(encoding="utf-8", errors="ignore").splitlines():
-                    if line.strip().startswith("level-name="):
-                        level_name = line.split("=", 1)[1].strip() or level_name
-                        break
-            return working_directory, working_directory / level_name
+    def _current_properties(self) -> dict[str, str]:
+        """Current server.properties as {key: value}; executor-thread only."""
+        server_directory, _ = self._resolve_paths()
+        return {entry["key"]: entry["value"] for entry in properties.read(server_directory / "server.properties")}
 
-        return self.call(resolve)
+    def bootstrap_pending(self, logger=None) -> None:
+        """Load (or create) the persisted effective-value baseline. Call from on_load."""
+        if self.config is None:
+            return
+        self.pending = pending.PendingProperties(
+            self.config.path.with_name("pending_properties.json"), self.config, logger
+        )
+        try:
+            current = self._current_properties()
+        except Exception:
+            current = {}
+        self.pending.load_or_bootstrap(current)
+
+    def mark_server_started(self) -> None:
+        """The server (re)started: current file values are now in effect."""
+        if self.pending is None:
+            return
+        try:
+            current = self._current_properties()
+        except Exception:
+            return
+        self.pending.reset(current)
 
     def _world_signature(self, world_directory: Path) -> tuple[tuple[str, int], ...]:
         """(path, mtime_ns) pairs for every file world() reads.
@@ -462,13 +496,55 @@ class MCDRBridge:
         server_directory, _ = self._paths()
         path = server_directory / "server.properties"
         entries = properties.read(path)
+        current = {entry["key"]: entry["value"] for entry in entries}
+
+        # Changes applied immediately by server commands (e.g. /whitelist on|off)
+        # must not be flagged as pending; sync their baseline once the file settles.
+        with self._instant_lock:
+            instant_keys = set(self._instant_keys)
+            self._instant_keys.clear()
+        if instant_keys and self.pending is not None:
+            for key in instant_keys:
+                if key in current:
+                    self.pending.set_key(key, current[key])
+
+        diff = self.pending.diff(current) if self.pending is not None else {}
+        result_entries: list[dict[str, Any]] = []
         for entry in entries:
-            if entry["key"] in _SENSITIVE_PROPERTY_KEYS:
+            key = entry["key"]
+            effective, _file_value = diff.get(key, (None, None))
+            entry["pending"] = key in diff
+            if key in _SENSITIVE_PROPERTY_KEYS:
                 # Never ship secrets to the browser; an empty submission means "keep".
                 entry["sensitive"] = True
                 entry["has_value"] = bool(entry["value"])
+                entry["effective_set"] = bool(effective)
                 entry["value"] = ""
-        return {"path": str(path), "entries": entries}
+            elif key in diff:
+                entry["effective"] = effective
+            result_entries.append(entry)
+
+        # Keys that were removed from the file while still in the baseline.
+        for key, (effective, file_value) in diff.items():
+            if file_value is not None:
+                continue
+            if key in _SENSITIVE_PROPERTY_KEYS:
+                result_entries.append(
+                    {
+                        "key": key,
+                        "value": "",
+                        "sensitive": True,
+                        "has_value": False,
+                        "pending": True,
+                        "effective_set": bool(effective),
+                        "removed": True,
+                    }
+                )
+            else:
+                result_entries.append(
+                    {"key": key, "value": None, "pending": True, "effective": effective, "removed": True}
+                )
+        return {"path": str(path), "entries": result_entries}
 
     def update_server_properties(self, changes: dict[str, Any]) -> dict[str, Any]:
         changes = {
@@ -670,9 +746,16 @@ class MCDRBridge:
         def perform() -> str | None:
             # RCON is the only transport that returns the server's reply text.
             if self.server.is_rcon_running():
-                return self.server.rcon_query(command)
-            self.server.execute(command)
-            return None
+                result_text = self.server.rcon_query(command)
+            else:
+                self.server.execute(command)
+                result_text = None
+            if action in ("whitelist_on", "whitelist_off"):
+                # These commands rewrite server.properties and take effect immediately,
+                # so sync their baseline instead of flagging them as pending restart.
+                with self._instant_lock:
+                    self._instant_keys.add("white-list")
+            return result_text
 
         result = self.call(perform, timeout=10.0)
         return {"accepted": True, "action": action, "command": command, "result": result}

@@ -173,6 +173,11 @@
     prop_on: '启用',
     prop_off: '停用',
     prop_none: '没有匹配的配置项。',
+    prop_pending: '待重启生效',
+    prop_diff: '原值: {old} → 新值: {new}',
+    prop_added: '新增: {value}',
+    prop_deleted: '已删除（原值: {value}）',
+    prop_sensitive_changed: '已修改（值已隐藏）',
     properties_count: '共 {total} 项 · 已修改 {modified}',
     save_count: '保存修改 ({n})',
     save_confirm: '将修改 {n} 项配置，需要重启服务端才会生效。确认保存吗？',
@@ -370,6 +375,11 @@
     prop_on: 'On',
     prop_off: 'Off',
     prop_none: 'No matching settings.',
+    prop_pending: 'Pending restart',
+    prop_diff: 'Original: {old} → New: {new}',
+    prop_added: 'Added: {value}',
+    prop_deleted: 'Removed (original: {value})',
+    prop_sensitive_changed: 'Changed (value hidden)',
     properties_count: '{total} items · {modified} modified',
     save_count: 'Save changes ({n})',
     save_confirm: 'Save {n} setting(s)? A server restart is required for them to take effect.',
@@ -422,7 +432,10 @@
   function apply() {
     document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
     const isLogin = !!document.querySelector('.login-shell');
-    document.title = t(isLogin ? 'page_title_login' : 'page_title_console');
+    // A configurable panel title (panel_title) injected by the server wins over the
+    // translated default, so the brand stays consistent across language switches.
+    const customTitle = document.querySelector('meta[name="mwm-panel-title"]');
+    document.title = (customTitle && customTitle.getAttribute('content')) || t(isLogin ? 'page_title_login' : 'page_title_console');
     document.querySelectorAll('[data-i18n]').forEach((el) => { el.innerHTML = t(el.dataset.i18n); });
     document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => { el.placeholder = t(el.dataset.i18nPlaceholder); });
     document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = t(el.dataset.i18nTitle); });

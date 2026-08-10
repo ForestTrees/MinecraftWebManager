@@ -15,7 +15,7 @@ from .web import WebService
 
 PLUGIN_METADATA = {
     "id": "minecraft_web_manager",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "name": "Minecraft Web Manager",
     "dependencies": {"mcdreforged": ">=2.15.0"},
 }
@@ -26,12 +26,13 @@ _LIST_PATTERN = re.compile(r"players online:\s*(.*)$", re.IGNORECASE)
 
 _service: WebService | None = None
 _history: MetricsHistory | None = None
+_bridge: MCDRBridge | None = None
 _players: dict[str, dict[str, Any]] = {}
 _pending_player_meta: dict[str, dict[str, str]] = {}
 
 
 def on_load(server, prev_module) -> None:
-    global _service, _history, _players, _pending_player_meta
+    global _service, _history, _bridge, _players, _pending_player_meta
     if prev_module is not None:
         if getattr(prev_module, "_service", None) is not None:
             prev_module._service.stop()
@@ -47,6 +48,10 @@ def on_load(server, prev_module) -> None:
         server.logger.warning("Minecraft Web Manager bootstrap password: %s", bootstrap_password)
         server.logger.warning("Save it now. To reset it later, clear password.salt and password.hash in the plugin config, then reload.")
     bridge = MCDRBridge(server, _players, config)
+    _bridge = bridge
+    # Load (or create) the effective-value baseline for tracking saved-but-not-yet
+    # effective server.properties changes; survives plugin reloads and MCDR restarts.
+    bridge.bootstrap_pending(server.logger)
     _history = MetricsHistory(bridge.sample, server.logger)
     try:
         _history.start()
@@ -91,13 +96,14 @@ def _seed_online_players(server) -> None:
 
 
 def on_unload(server) -> None:
-    global _service, _history
+    global _service, _history, _bridge
     if _service is not None:
         _service.stop()
         _service = None
     if _history is not None:
         _history.stop()
         _history = None
+    _bridge = None
 
 
 def on_info(server, info) -> None:
@@ -155,6 +161,10 @@ def on_server_start(server) -> None:
 
 
 def on_server_startup(server) -> None:
+    # The server finished starting: every property in the file is now in effect,
+    # so pending-restart markers can be cleared.
+    if _bridge is not None:
+        _bridge.mark_server_started()
     if _service is not None:
         _service.publish("status", {"event": "server_startup"})
 

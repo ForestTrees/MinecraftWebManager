@@ -371,6 +371,11 @@ input.field:focus, select.field:focus {
 }
 .property-card.dirty { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
 .property-card.dirty .property-name { color: var(--accent); }
+.property-card.pending { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.property-card.pending .property-name { color: var(--warn); }
+.property-name .tag { margin-left: .4rem; }
+.tag.pending { background: var(--warn-soft); color: var(--warn); }
+.property-pending { font-size: .75rem; color: var(--warn); overflow-wrap: anywhere; }
 .property-label { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
 .property-name { font-weight: 600; font-size: .88rem; }
 .property-key { font-size: .74rem; color: var(--text-faint); overflow: hidden; text-overflow: ellipsis; }
