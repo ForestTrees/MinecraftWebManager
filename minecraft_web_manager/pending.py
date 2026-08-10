@@ -79,6 +79,13 @@ class PendingProperties:
                 self.baseline[key] = value
             self._write(self.baseline)
 
+    def get_effective(self, key: str, fallback: str | None = None) -> str | None:
+        """The value the running server actually uses for ``key`` (the baseline)."""
+        with self.lock:
+            if self.baseline is None:
+                return fallback
+            return self.baseline.get(key, fallback)
+
     # ---------- persistence ----------
 
     def _signature(self, payload: bytes) -> str:

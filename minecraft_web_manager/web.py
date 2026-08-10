@@ -376,9 +376,14 @@ class WebService:
                 raise HTTPException(status_code=503, detail=str(error)) from error
 
         @app.get("/api/players/roster")
-        async def players_roster(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+        async def players_roster(
+            _: dict[str, Any] = Depends(require_user),
+            light: bool = Query(False),
+        ) -> dict[str, Any]:
             try:
-                return await asyncio.to_thread(self.bridge.roster)
+                # light=1 skips per-player RCON queries, so a whitelist toggle can
+                # refresh the access lists almost instantly.
+                return await asyncio.to_thread(self.bridge.roster, include_details=not light)
             except Exception as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
 

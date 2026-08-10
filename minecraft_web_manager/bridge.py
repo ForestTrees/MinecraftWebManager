@@ -423,6 +423,11 @@ class MCDRBridge:
             return None
 
         result = self.call(perform, timeout=10.0)
+        if re.match(r"(?i)^whitelist\s+(on|off)\b", command):
+            # whitelist on/off rewrites server.properties and takes effect immediately,
+            # even when typed by hand in the console — keep the baseline in sync.
+            with self._instant_lock:
+                self._instant_keys.add("white-list")
         return {"accepted": True, "transport": transport, "result": result}
 
     def server_action(self, action: str) -> bool:
@@ -492,14 +497,9 @@ class MCDRBridge:
             found.append(entry)
         return found
 
-    def server_properties(self) -> dict[str, Any]:
-        server_directory, _ = self._paths()
-        path = server_directory / "server.properties"
-        entries = properties.read(path)
-        current = {entry["key"]: entry["value"] for entry in entries}
-
-        # Changes applied immediately by server commands (e.g. /whitelist on|off)
-        # must not be flagged as pending; sync their baseline once the file settles.
+    def _sync_instant_keys(self, current: dict[str, str]) -> None:
+        """Fold server commands that apply immediately (e.g. whitelist on/off) into
+        the baseline so they are not misreported as pending a restart."""
         with self._instant_lock:
             instant_keys = set(self._instant_keys)
             self._instant_keys.clear()
@@ -507,6 +507,13 @@ class MCDRBridge:
             for key in instant_keys:
                 if key in current:
                     self.pending.set_key(key, current[key])
+
+    def server_properties(self) -> dict[str, Any]:
+        server_directory, _ = self._paths()
+        path = server_directory / "server.properties"
+        entries = properties.read(path)
+        current = {entry["key"]: entry["value"] for entry in entries}
+        self._sync_instant_keys(current)
 
         diff = self.pending.diff(current) if self.pending is not None else {}
         result_entries: list[dict[str, Any]] = []
@@ -647,15 +654,31 @@ class MCDRBridge:
             self.config.save()
         return {"name": name, "is_bot": is_bot}
 
-    def roster(self) -> dict[str, Any]:
-        """Every player the server has ever recorded, merged with live online state."""
+    def roster(self, include_details: bool = True) -> dict[str, Any]:
+        """Every player the server has ever recorded, merged with live online state.
+
+        ``include_details=False`` skips the per-player RCON position/dimension
+        queries, making it cheap enough to refresh right after a whitelist toggle
+        without the roster table stalling.
+        """
         server_directory, world_directory = self._paths()
         data = roster.build(server_directory, world_directory)
         # Vanilla's /whitelist on|off persists to server.properties, so that is the
-        # source of truth for whether the whitelist is currently enforced.
+        # source of truth for whether the whitelist is currently enforced. The
+        # *effective* value (baseline) is shown when a file change is still pending
+        # a restart, keeping this toggle consistent with the actual server state.
         settings = {entry["key"]: entry["value"] for entry in properties.read(server_directory / "server.properties")}
-        data["whitelist_enabled"] = settings.get("white-list") == "true"
-        data["whitelist_enforced"] = settings.get("enforce-whitelist") == "true"
+        self._sync_instant_keys(settings)
+        effective_whitelist = (
+            self.pending.get_effective("white-list", settings.get("white-list")) if self.pending is not None else settings.get("white-list")
+        )
+        effective_enforce = (
+            self.pending.get_effective("enforce-whitelist", settings.get("enforce-whitelist"))
+            if self.pending is not None
+            else settings.get("enforce-whitelist")
+        )
+        data["whitelist_enabled"] = effective_whitelist == "true"
+        data["whitelist_enforced"] = effective_enforce == "true"
         online_mode = settings.get("online-mode") == "true"
         manual_bots = {str(entry).lower() for entry in (self.config.data.get("bot_names") or [])} if self.config else set()
         not_bots = {str(entry).lower() for entry in (self.config.data.get("not_bot_names") or [])} if self.config else set()
@@ -667,7 +690,26 @@ class MCDRBridge:
                 except re.error:
                     pass  # a malformed regex in the config is ignored, not fatal
         patterns_apply_to_all = bool(self.config.data.get("bot_name_patterns_apply_to_all", False)) if self.config else False
-        online = {entry["name"].lower(): entry for entry in self.players_detail() if entry.get("name")}
+        if include_details:
+            online = {entry["name"].lower(): entry for entry in self.players_detail() if entry.get("name")}
+        else:
+            def snapshot_players() -> dict[str, dict[str, Any]]:
+                return dict(self.players)
+
+            players_state = self.call(snapshot_players) if self.players else {}
+            now = time.time()
+            online = {}
+            for name, state in sorted(players_state.items()):
+                joined_at = state.get("joined_at")
+                online[name.lower()] = {
+                    "name": name,
+                    "ip": state.get("ip"),
+                    "uuid": state.get("uuid"),
+                    "joined_at": joined_at,
+                    "online_seconds": max(0, int(now - joined_at)) if joined_at else None,
+                    "dimension": None,
+                    "position": None,
+                }
 
         for player in data["players"]:
             name = (player.get("name") or "").lower()

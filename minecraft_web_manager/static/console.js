@@ -397,7 +397,15 @@ async function performPlayerAction(action, target, reason) {
       body: JSON.stringify({ action, target: target || null, reason: reason || null }),
     });
     showToast(response.result ? T('toast_result', { label, result: response.result }) : T('toast_submitted', { label }));
-    refreshRoster();
+    if (action === 'whitelist_on' || action === 'whitelist_off') {
+      // Apply the toggle immediately and refresh the access lists with the cheap
+      // (no-RCON) roster so the switch doesn't wait for per-player queries.
+      const toggle = $('whitelist-toggle');
+      if (toggle && document.activeElement !== toggle) toggle.checked = action === 'whitelist_on';
+      refreshRoster(true);
+    } else {
+      refreshRoster();
+    }
   } catch (error) {
     showToast(T('toast_failed', { label, error: error.message }), { type: 'error' });
   }
@@ -492,9 +500,9 @@ function renderRoster(players) {
 }
 
 // One fetch feeds both the roster table and the access-control lists.
-async function refreshRoster() {
+async function refreshRoster(light = false) {
   try {
-    const data = await api('/api/players/roster');
+    const data = await api(`/api/players/roster${light ? '?light=1' : ''}`);
     renderRoster(data.players || []);
     renderAccess(data);
   } catch (error) {
