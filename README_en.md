@@ -10,8 +10,6 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `psutil`
 
-> Note: the dashboard UI is currently available in Chinese only.
-
 ---
 
 ## Features
@@ -54,39 +52,17 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ## Installation
 
-### 1. Drop in the plugin
-
-Place this repository under MCDR's `plugins/` directory:
+### 1. One-command install
 
 ```
-MCDR root/
-├── plugins/
-│   └── MinecraftWebManager/
-│       ├── mcdreforged.plugin.json
-│       └── minecraft_web_manager/
-├── server/
-└── config.yml
+!!MCDR plugin install minecraft_web_manager
 ```
 
-Alternatively, zip `mcdreforged.plugin.json` together with `minecraft_web_manager/`, rename the archive to `.mcdr` and drop that into `plugins/`. `mcdreforged.plugin.json` must sit at the root level of the archive.
+### 2. Plugin management
 
-### 2. Install the Python dependencies
+See the official MCDReforged documentation: https://docs.mcdreforged.com/en/latest/command/mcdr.html#plugin-management
 
-```bash
-pip install -r requirements.txt
-```
-
-Make sure you are using the same Python environment that runs MCDR — activate its virtualenv first if it has one.
-
-### 3. Load the plugin
-
-In the MCDR console:
-
-```
-!!MCDR reload plugin minecraft_web_manager
-```
-
-### 4. Grab the bootstrap password
+### 3. Grab the bootstrap password
 
 On first load the plugin generates a one-time password and prints it to the MCDR log at `WARNING` level:
 
@@ -101,6 +77,16 @@ http://127.0.0.1:8088
 ```
 
 The default username is `admin`; the password is the string above.
+
+### 4. Forgot the password
+
+Set both `password.salt` and `password.hash` to empty strings:
+
+```json
+"password": { "salt": "", "hash": "" }
+```
+
+Save, then run `!!MCDR reload plugin minecraft_web_manager` — a fresh one-time password is printed to the MCDR log again.
 
 ---
 
@@ -122,16 +108,6 @@ The config file lives at `config/minecraft_web_manager/config.json` inside MCDR'
 | `bot_name_patterns_apply_to_all` | `false` | Set to `true` to apply name rules to every player (for servers whose fake players do land in usercache); real players with matching names belong in `not_bot_names` |
 
 After login the browser receives an **HttpOnly + SameSite=Strict session cookie** (invisible to page scripts and never sent on cross-site requests), valid for 30 days by default. Active use keeps sliding the expiry forward, so normal usage does not require repeated logins. The "log out" button ends the session immediately; clearing `token_secret` also invalidates every session at once.
-
-### Forgot the password
-
-Set both `password.salt` and `password.hash` to empty strings:
-
-```json
-"password": { "salt": "", "hash": "" }
-```
-
-Save, then run `!!MCDR reload plugin minecraft_web_manager` — a fresh one-time password is printed to the MCDR log again.
 
 ---
 

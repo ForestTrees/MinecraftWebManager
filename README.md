@@ -52,39 +52,18 @@
 
 ## 安装
 
-### 1. 放置插件
-
-把本仓库放进 MCDR 的 `plugins/` 目录，形成如下结构：
+### 1. 一键安装指令
 
 ```
-MCDR 根目录/
-├── plugins/
-│   └── MinecraftWebManager/
-│       ├── mcdreforged.plugin.json
-│       └── minecraft_web_manager/
-├── server/
-└── config.yml
+!!MCDR plugin install minecraft_web_manager
 ```
 
-也可以把 `mcdreforged.plugin.json` 与 `minecraft_web_manager/` 一起打包成 zip、后缀改为 `.mcdr`，直接放进 `plugins/`。注意 `mcdreforged.plugin.json` 必须位于压缩包的根层级。
+### 2. 插件管理
 
-### 2. 安装 Python 依赖
+请参考mcdreforged官方文档：https://docs.mcdreforged.com/zh-cn/latest/command/mcdr.html#plugin-management
 
-```bash
-pip install -r requirements.txt
-```
 
-请确保使用的是运行 MCDR 的那个 Python 环境。若 MCDR 装在虚拟环境里，先激活它再执行上面的命令。
-
-### 3. 加载插件
-
-在 MCDR 控制台执行：
-
-```
-!!MCDR reload plugin minecraft_web_manager
-```
-
-### 4. 取得初始密码
+### 3. 取得初始密码
 
 首次加载时插件会生成一次性密码并打印到 MCDR 日志（`WARNING` 级别）：
 
@@ -99,6 +78,16 @@ http://127.0.0.1:8088
 ```
 
 默认用户名 `admin`，密码即上面那串。
+
+### 4. 忘记密码怎么办
+
+把配置文件里的 `password.salt` 和 `password.hash` 都改成空字符串 `""`：
+
+```json
+"password": { "salt": "", "hash": "" }
+```
+
+保存后执行 `!!MCDR reload plugin minecraft_web_manager`，新的一次性密码会重新打印在 MCDR 日志里。
 
 ---
 
@@ -120,16 +109,6 @@ http://127.0.0.1:8088
 | `bot_name_patterns_apply_to_all` | `false` | 设为 `true` 时名称规则对所有玩家生效（适用于假人也写入 usercache 的服务端）；同名真玩家请加入 `not_bot_names` |
 
 登录后浏览器会获得一个 **HttpOnly + SameSite=Strict 的会话 cookie**（脚本读不到、跨站请求不会携带），有效期默认 30 天；只要期间有活跃操作，到期时间会自动顺延，因此普通使用不需要反复登录。点「退出登录」会立刻注销；清空 `token_secret` 同样会让所有会话立即失效。
-
-### 忘记密码怎么办
-
-把配置文件里的 `password.salt` 和 `password.hash` 都改成空字符串 `""`：
-
-```json
-"password": { "salt": "", "hash": "" }
-```
-
-保存后执行 `!!MCDR reload plugin minecraft_web_manager`，新的一次性密码会重新打印在 MCDR 日志里。
 
 ---
 
