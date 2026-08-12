@@ -23,6 +23,8 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 - One-click start / stop / restart of the server
 - Always-visible overview strip: run state, player count, TPS/MSPT, uptime, Minecraft and MCDR versions, world name and seed
 
+![Live console](docs/img/实时控制台.png)
+
 ### Player management
 
 - **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Detected Carpet fake players (bots) live in a separate "Bot management" table inside the same tab, collapsible and manually flaggable per row; the bot table is trimmed to player, status, session, last seen, dimension, position, UUID and actions (no IP/tags columns)
@@ -31,16 +33,22 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 - **Operators**: view, grant and revoke OP
 - **Bans**: ban and pardon players and IPs, with an optional reason
 
+![Player roster](docs/img/玩家管理-玩家列表.png)
+
 ### World
 
 - **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
 - **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder
+
+![World](docs/img/world.png)
 
 ### Server status
 
 - TPS, MSPT, swap, disk and system load at a glance
 - Line charts for CPU usage, memory usage and live network throughput, over 10m / 30m / 1h / 6h / 12h / 1d / 3d / 7d
 - Whole-host and Minecraft-process series are plotted separately. Samples are kept at 1-second resolution for the last hour and as 1-minute averages for the last 7 days
+
+![Server status](docs/img/服务器状态.png)
 
 ### Other
 
