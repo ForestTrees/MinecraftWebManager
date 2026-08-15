@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -25,6 +26,40 @@ from . import nbt, pending, properties, roster
 # command (or arguments) into the console/RCON line, so targets are validated not escaped.
 _PLAYER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 _PLUGIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+# Mod / config file safety limits. Mods can be hundreds of MB, but config files
+# are plain text and should stay small enough to edit in a browser textarea.
+_MAX_MOD_CONFIG_BYTES = 1 * 1024 * 1024
+_MAX_MOD_CONFIG_CHARS = 1_000_000
+# Give big plugin downloads time to finish; the frontend reports an honest timeout
+# when the PIM operation is still running after this many seconds.
+_CHECK_UPDATE_TIMEOUT = 120.0
+_PIM_POLL_INTERVAL = 0.25
+
+# Best-effort detection of MCDR plugin-installer outcome from its plain-text output.
+# MCDR itself is bilingual (en/zh), so both languages are matched. ``success`` /
+# ``noop`` markers only count when no failure marker is present; if the operation
+# finished without any known marker the panel reports "not confirmed" instead of
+# guessing success.
+_PIM_FAILURE_MARKER = re.compile(
+    r"there's ongoing operations|发现正在进行的操作|"
+    r"dependency resolution failed|依赖解析失败|"
+    r"fetch failed|元数据更新失败|"
+    r"installation error|插件安装失败|"
+    r"cannot be reinstalled|无法被重新安装|"
+    r"cannot install builtin|无法安装内置插件|"
+    r"cannot check update for builtin|不可为内置插件|"
+    r"invalid plugin id|无效的插件id|"
+    r"not found|不存在|"
+    r"package installation failed|包依赖安装失败|"
+    r"abort|安装终止",
+    re.IGNORECASE,
+)
+_PIM_INSTALL_SUCCESS_MARKER = re.compile(r"installation done|插件安装完成", re.IGNORECASE)
+_PIM_INSTALL_NOOP_MARKER = re.compile(r"nothing needs to be installed|无需安装", re.IGNORECASE)
+_PIM_CHECK_SUCCESS_MARKER = re.compile(
+    r"found \d|are up-to-date|no updates found|找到了|均为最新版本", re.IGNORECASE
+)
 
 # Carpet fake players always get the Java offline-mode UUID derived from their name,
 # no matter how the server itself is configured.
@@ -440,16 +475,81 @@ class MCDRBridge:
         def get_plugins() -> list[dict[str, Any]]:
             metadata = self.server.get_all_metadata()
             self_plugin_id = self.server.get_self_metadata().id
-            return [
-                {
-                    "id": plugin_id,
-                    "name": self._string_or_none(getattr(item, "name", plugin_id)),
-                    "version": self._string_or_none(getattr(item, "version", None)),
-                    "description": self._string_or_none(getattr(item, "description", None)),
-                    "self": plugin_id == self_plugin_id,
-                }
-                for plugin_id, item in sorted(metadata.items())
-            ]
+            entries: list[dict[str, Any]] = []
+            for plugin_id, item in sorted(metadata.items()):
+                plugin_type = self.server.get_plugin_type(plugin_id)
+                type_name = getattr(plugin_type, "name", None)
+                file_path = self.server.get_plugin_file_path(plugin_id)
+                file_name = Path(file_path).name if file_path else None
+                entries.append(
+                    {
+                        "id": plugin_id,
+                        "name": self._string_or_none(getattr(item, "name", plugin_id)),
+                        "version": self._string_or_none(getattr(item, "version", None)),
+                        "description": self._string_or_none(getattr(item, "description", None)),
+                        "self": plugin_id == self_plugin_id,
+                        "state": "loaded",
+                        "disabled": False,
+                        "unloaded": False,
+                        "builtin": type_name == "builtin",
+                        "type": type_name,
+                        "updatable": type_name == "packed",
+                        "file": file_name,
+                        "file_name": file_name,
+                        "file_path": file_path,
+                    }
+                )
+
+            for file_path in self.server.get_disabled_plugin_list():
+                file_name = Path(file_path).name
+                entries.append(
+                    {
+                        "id": None,
+                        "name": file_name,
+                        "version": None,
+                        "description": None,
+                        "self": False,
+                        "state": "disabled",
+                        "disabled": True,
+                        "unloaded": False,
+                        "builtin": False,
+                        "type": None,
+                        "updatable": False,
+                        "file": file_name,
+                        "file_name": file_name,
+                        "file_path": file_path,
+                    }
+                )
+
+            for file_path in self.server.get_unloaded_plugin_list():
+                file_name = Path(file_path).name
+                entries.append(
+                    {
+                        "id": None,
+                        "name": file_name,
+                        "version": None,
+                        "description": None,
+                        "self": False,
+                        "state": "unloaded",
+                        "disabled": False,
+                        "unloaded": True,
+                        "builtin": False,
+                        "type": None,
+                        "updatable": False,
+                        "file": file_name,
+                        "file_name": file_name,
+                        "file_path": file_path,
+                    }
+                )
+
+            state_order = {"loaded": 0, "disabled": 1, "unloaded": 2}
+            entries.sort(
+                key=lambda entry: (
+                    state_order.get(entry["state"], 9),
+                    str(entry.get("name") or entry.get("id") or "").lower(),
+                )
+            )
+            return entries
 
         return self.call(get_plugins)
 
@@ -457,30 +557,354 @@ class MCDRBridge:
         if not _PLUGIN_ID_PATTERN.match(plugin_id or ""):
             raise ValueError(f"Invalid plugin id: {plugin_id!r}")
 
+        # Reloading this very plugin is safe: MCDR unloads the plugin (the web
+        # thread shuts down; uvicorn releases the listening socket first, so
+        # on_load can bind the same port again) and loads it back, restarting
+        # the panel. The in-flight request rides out the shutdown, so it may
+        # take ~10 s (WebService.stop joins the web thread with a 10 s timeout)
+        # before the response arrives; the browser's WebSocket reconnects
+        # automatically once the panel is back.
         def do_reload() -> bool:
-            # Reloading this very plugin would stop the web server mid-request and
-            # leave the caller with a hanging request / reset connection. That flow
-            # only works from the MCDR console.
-            if plugin_id == self.server.get_self_metadata().id:
-                raise ValueError(
-                    "Cannot reload this plugin from the web panel; "
-                    f"use !!MCDR reload plugin {plugin_id} in the MCDR console instead"
-                )
             return bool(self.server.reload_plugin(plugin_id))
 
         result = self.call(do_reload, timeout=20.0)
         return {"accepted": bool(result), "plugin_id": plugin_id}
 
+    # ---------- plugin online management (via MCDR commands / APIs) ----------
+
+    @staticmethod
+    def _validate_plugin_id(plugin_id: str) -> str:
+        if not _PLUGIN_ID_PATTERN.match(plugin_id or ""):
+            raise ValueError(f"Invalid plugin id: {plugin_id!r}")
+        return plugin_id
+
+    @staticmethod
+    def _validate_plugin_file_name(file_name: str) -> str:
+        if not isinstance(file_name, str) or not file_name:
+            raise ValueError("Invalid plugin file name")
+        if (
+            Path(file_name).drive
+            or "/" in file_name
+            or "\\" in file_name
+            or "\x00" in file_name
+            or "\n" in file_name
+            or "\r" in file_name
+            or file_name in (".", "..")
+        ):
+            raise ValueError("Invalid plugin file name")
+        return file_name
+
+    @staticmethod
+    def _quote_mcdr_arg(value: str) -> str:
+        """Quote a command argument the way MCDR's QuotableText parser expects."""
+        if re.fullmatch(r"[A-Za-z0-9_.\-]+", value):
+            return value
+        return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    def _plugin_command(
+        self, command: str, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        return self.execute(command, "console", on_console_line)
+
+    def plugin_check_update(
+        self, plugin_id: str | None = None, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        if plugin_id is not None:
+            self._validate_plugin_id(plugin_id)
+            command = f"!!MCDR plugin checkupdate {plugin_id}"
+            checked = [plugin_id]
+        else:
+            command = "!!MCDR plugin checkupdate"
+            checked = [
+                entry["id"]
+                for entry in self.plugins()
+                if entry["state"] == "loaded" and not entry["builtin"] and entry["id"]
+            ]
+
+        collected: list[str] = []
+        collect_lock = threading.Lock()
+
+        def collect(line: dict[str, Any]) -> None:
+            with collect_lock:
+                collected.append(str(line.get("content") or ""))
+            if on_console_line is not None:
+                on_console_line(line)
+
+        result = self._plugin_command(command, collect)
+        self._wait_for_pim_operation("check_update")
+        time.sleep(0.2)  # drain any final replies queued right after the thread ends
+        with collect_lock:
+            lines = list(collected)
+        text = "\n".join(lines)
+        failed = _PIM_FAILURE_MARKER.search(text) is not None
+        return {
+            **result,
+            "lines": lines,
+            "checked": checked,
+            "updates": self._parse_plugin_updates(lines),
+            # A rejected check (another PIM operation running, bad id, dependency
+            # resolution failure, ...) must NOT be reported as "all up to date".
+            "failed": failed,
+            "success": not failed and _PIM_CHECK_SUCCESS_MARKER.search(text) is not None,
+        }
+
+    def _wait_for_pim_operation(self, operation_key: str) -> bool:
+        """Wait for MCDR's plugin installer operation (e.g. checkupdate) to finish.
+
+        Returns ``True`` if the operation finished within the deadline, ``False``
+        if it was still running when the deadline passed (frontend reports timeout).
+        """
+        deadline = time.time() + _CHECK_UPDATE_TIMEOUT
+        while time.time() < deadline:
+            if self.call(lambda: self._pim_operation_finished(operation_key)):
+                return True
+            time.sleep(_PIM_POLL_INTERVAL)
+        return False
+
+    def _pim_operation_finished(self, operation_key: str) -> bool:
+        mcdr_plugin = self.server.get_plugin_instance(core_constant.PACKAGE_NAME)
+        if mcdr_plugin is None:
+            return True
+        for sub_command in getattr(mcdr_plugin, "main_sub_commands", []) or []:
+            pim_ext = getattr(sub_command, "pim_ext", None)
+            if pim_ext is None:
+                continue
+            operation = getattr(pim_ext, "current_operation", None)
+            if operation is None:
+                return True
+            # A checkupdate that was rejected (e.g. another PIM operation is running)
+            # never starts a thread of its own, so there is nothing to wait for.
+            if operation.thread is None or operation.op_key != operation_key:
+                return True
+            return False
+        return True
+
+    @staticmethod
+    def _parse_plugin_updates(lines: list[str]) -> list[dict[str, str]]:
+        """Best-effort parse of ``!!MCDR plugin checkupdate`` plain-text output.
+
+        Updatable entries are printed like ``  plugin_id 1.0.0 -> 1.1.0``; only those
+        lines (not the "not updatable" / "up to date" sections) contain an arrow.
+        """
+        updates: list[dict[str, str]] = []
+        pattern = re.compile(r"([a-z][a-z0-9_]{0,63})\s+(\S+)\s*->\s*(\S+)")
+        for line in lines:
+            match = pattern.search(line)
+            if match is not None:
+                updates.append(
+                    {
+                        "plugin_id": match.group(1),
+                        "current": match.group(2),
+                        "latest": match.group(3),
+                    }
+                )
+        return updates
+
+    def plugin_update(
+        self, plugin_id: str | None = None, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        if plugin_id is not None:
+            self._validate_plugin_id(plugin_id)
+            if plugin_id == self.call(lambda: self.server.get_self_metadata().id):
+                # MCDR replaces the file AND reloads the plugin right after the
+                # install, so updating this very plugin would stop the web server
+                # mid-request and leave the caller with a dead connection.
+                raise ValueError(
+                    "Cannot update this plugin from the web panel; "
+                    f"use !!MCDR plugin install -U -y {plugin_id} in the MCDR console instead"
+                )
+            command = f"!!MCDR plugin install -U -y {plugin_id}"
+            skipped = False
+        else:
+            # Update all = enumerate updatable plugins explicitly instead of `*`,
+            # because `*` also targets this very plugin and would kill the panel.
+            ids = [
+                entry["id"]
+                for entry in self.plugins()
+                if entry["state"] == "loaded" and entry["updatable"] and entry["id"] and not entry["self"]
+            ]
+            if not ids:
+                return {
+                    "accepted": True,
+                    "completed": True,
+                    "success": True,
+                    "failed": False,
+                    "noop": False,
+                    "skipped": True,
+                    "lines": [],
+                }
+            command = "!!MCDR plugin install -U -y " + " ".join(ids)
+            skipped = False
+
+        collected: list[str] = []
+        collect_lock = threading.Lock()
+
+        def collect(line: dict[str, Any]) -> None:
+            with collect_lock:
+                collected.append(str(line.get("content") or ""))
+            if on_console_line is not None:
+                on_console_line(line)
+
+        result = self._plugin_command(command, collect)
+        finished = self._wait_for_pim_operation("install")
+        time.sleep(0.2)
+        with collect_lock:
+            lines = list(collected)
+        text = "\n".join(lines)
+        failed = _PIM_FAILURE_MARKER.search(text) is not None
+        success = not failed and _PIM_INSTALL_SUCCESS_MARKER.search(text) is not None
+        noop = not failed and not success and _PIM_INSTALL_NOOP_MARKER.search(text) is not None
+        return {
+            **result,
+            "completed": finished,
+            "success": success,
+            "failed": failed,
+            "noop": noop,
+            "skipped": skipped,
+            "lines": lines,
+        }
+
+    def plugin_disable(
+        self, plugin_id: str, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        self._validate_plugin_id(plugin_id)
+
+        def check_disable() -> None:
+            if plugin_id == self.server.get_self_metadata().id:
+                raise ValueError(
+                    "Cannot disable this plugin from the web panel; "
+                    f"use !!MCDR plugin disable {plugin_id} in the MCDR console instead"
+                )
+            plugin_type = self.server.get_plugin_type(plugin_id)
+            if plugin_type is None:
+                raise ValueError(f"Plugin not found or not loaded: {plugin_id}")
+            if getattr(plugin_type, "name", "") == "builtin":
+                raise ValueError(f"Cannot disable builtin plugin: {plugin_id}")
+
+        self.call(check_disable)
+        return self._plugin_command(f"!!MCDR plugin disable {plugin_id}", on_console_line)
+
+    def plugin_enable(
+        self, file_name: str, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        self._validate_plugin_file_name(file_name)
+        command = f"!!MCDR plugin enable {self._quote_mcdr_arg(file_name)}"
+        return self._plugin_command(command, on_console_line)
+
+    def plugin_load(self, file_name: str) -> dict[str, Any]:
+        """Load an unloaded plugin file (e.g. one that failed to load at startup).
+
+        ``reload_plugin`` only works for loaded plugins, so this uses MCDR's
+        ``load_plugin`` API on the unloaded file path instead.
+        """
+        self._validate_plugin_file_name(file_name)
+
+        def do_load() -> bool:
+            candidates = [
+                Path(path)
+                for path in self.server.get_unloaded_plugin_list()
+                if Path(path).name == file_name
+            ]
+            if len(candidates) != 1:
+                raise ValueError(f"Plugin file not found or ambiguous: {file_name}")
+            return bool(self.server.load_plugin(str(candidates[0])))
+
+        accepted = bool(self.call(do_load, timeout=30.0))
+        return {"accepted": accepted, "file": file_name}
+
+    @staticmethod
+    def _remove_plugin_path(path: Path) -> None:
+        if path.is_symlink() or not path.exists():
+            raise ValueError(f"Plugin file not found: {path}")
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError as error:
+            raise ValueError(f"Cannot delete plugin file {path}: {error}") from error
+
+    def plugin_delete(
+        self,
+        plugin_id: str | None = None,
+        file_name: str | None = None,
+        on_console_line: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        if plugin_id and file_name:
+            raise ValueError("Specify either plugin_id or file_name, not both")
+
+        if plugin_id:
+            self._validate_plugin_id(plugin_id)
+
+            def unload_and_get_path() -> Path:
+                if plugin_id == self.server.get_self_metadata().id:
+                    raise ValueError(
+                        "Cannot delete this plugin from the web panel; "
+                        f"use the MCDR console to manage {plugin_id}"
+                    )
+                path_text = self.server.get_plugin_file_path(plugin_id)
+                if path_text is None:
+                    raise ValueError(f"Plugin not found or not loaded: {plugin_id}")
+                result = self.server.unload_plugin(plugin_id)
+                if result is not True:
+                    raise ValueError(f"Failed to unload plugin: {plugin_id}")
+                return Path(path_text)
+
+            path = self.call(unload_and_get_path, timeout=30.0)
+            self._remove_plugin_path(path)
+            return {"plugin_id": plugin_id, "file": path.name, "deleted": True}
+
+        if file_name:
+            self._validate_plugin_file_name(file_name)
+
+            def resolve_path() -> Path:
+                candidates = [
+                    Path(path)
+                    for path in self.server.get_disabled_plugin_list() + self.server.get_unloaded_plugin_list()
+                    if Path(path).name == file_name
+                ]
+                if len(candidates) != 1:
+                    raise ValueError(f"Plugin file not found or ambiguous: {file_name}")
+                return candidates[0]
+
+            path = self.call(resolve_path)
+            self._remove_plugin_path(path)
+            return {"file": path.name, "deleted": True}
+
+        raise ValueError("plugin_id or file_name is required")
+
     def mods(self) -> list[dict[str, Any]]:
-        """Fabric mods found in the server's mods/ folder, named from their fabric.mod.json."""
+        """Mods found in the server's mods/ folder.
+
+        Fabric mods are named from their fabric.mod.json; other loaders (Forge /
+        NeoForge) fall back to the file name. Disabled mods are the same jars with a
+        ``.jar.disabled`` suffix, so they are listed too and can be re-enabled.
+        """
         server_directory, _ = self._paths()
         found: list[dict[str, Any]] = []
         try:
-            jars = sorted((server_directory / "mods").glob("*.jar"))
+            mods_directory = server_directory / "mods"
+            jars = sorted(
+                list(mods_directory.glob("*.jar")) + list(mods_directory.glob("*.jar.disabled")),
+                key=lambda path: path.name,
+            )
         except OSError:
             return found
         for jar in jars:
-            entry: dict[str, Any] = {"file": jar.name, "id": None, "name": None, "version": None, "description": None}
+            try:
+                stat = jar.stat()
+            except OSError:
+                stat = None
+            entry: dict[str, Any] = {
+                "file": jar.name,
+                "id": None,
+                "name": None,
+                "version": None,
+                "description": None,
+                "disabled": jar.name.endswith(".jar.disabled"),
+                "size": stat.st_size if stat is not None else None,
+                "mtime": stat.st_mtime if stat is not None else None,
+            }
             try:
                 with zipfile.ZipFile(jar) as archive:
                     metadata = json.loads(archive.read("fabric.mod.json").decode("utf-8", errors="replace"))
@@ -496,6 +920,317 @@ class MCDRBridge:
                 pass  # not a Fabric mod (or unreadable) — still list the file
             found.append(entry)
         return found
+
+    @staticmethod
+    def _mod_file_name(filename: str, *, allow_disabled: bool = True, require_active: bool = False, require_disabled: bool = False) -> str:
+        """Validate a mod file name and return it untouched.
+
+        Only the file name is accepted (no separators), and only ``.jar`` /
+        ``.jar.disabled`` names are allowed, so a crafted upload or delete target
+        can never escape the mods directory.
+        """
+        if not isinstance(filename, str) or not filename:
+            raise ValueError("Invalid mod file name")
+        if (
+            Path(filename).drive
+            or "/" in filename
+            or "\\" in filename
+            or "\x00" in filename
+            or filename in (".", "..")
+        ):
+            raise ValueError("Invalid mod file name")
+        disabled = filename.endswith(".jar.disabled")
+        active = filename.endswith(".jar") and not disabled
+        if not (active or (disabled and allow_disabled)):
+            raise ValueError("Mod file must end with .jar or .jar.disabled")
+        if require_active and not active:
+            raise ValueError("Only an enabled .jar mod can be disabled")
+        if require_disabled and not disabled:
+            raise ValueError("Only a .jar.disabled mod can be enabled")
+        return filename
+
+    def _mods_directory(self) -> Path:
+        server_directory, _ = self._paths()
+        return server_directory / "mods"
+
+    def upload_mod(self, filename: str, source, overwrite: bool = False) -> dict[str, Any]:
+        """Stream an uploaded jar into mods/ (through a temp file, atomically)."""
+        name = self._mod_file_name(filename, allow_disabled=False)
+        mods_directory = self._mods_directory()
+        mods_directory.mkdir(parents=True, exist_ok=True)
+        target = mods_directory / name
+        if target.exists():
+            if target.is_dir() or not overwrite:
+                raise ValueError(f"Mod file already exists: {name}")
+        temporary = mods_directory / f".{name}.{uuid.uuid4().hex}.upload"
+        try:
+            try:
+                source.seek(0)
+            except (AttributeError, OSError):
+                pass
+            with temporary.open("wb") as output:
+                shutil.copyfileobj(source, output, length=1024 * 1024)
+            if not zipfile.is_zipfile(temporary):
+                raise ValueError("Uploaded file is not a valid .jar archive")
+            if target.exists() and not overwrite:
+                raise ValueError(f"Mod file already exists: {name}")
+            os.replace(temporary, target)
+        except Exception:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise
+        return {"file": name, "size": target.stat().st_size, "disabled": False}
+
+    def set_mod_enabled(self, filename: str, enabled: bool) -> dict[str, Any]:
+        """Disable a mod by renaming ``foo.jar`` -> ``foo.jar.disabled`` (or back)."""
+        if enabled:
+            name = self._mod_file_name(filename, require_disabled=True)
+            target_name = name[: -len(".disabled")]
+        else:
+            name = self._mod_file_name(filename, require_active=True)
+            target_name = name + ".disabled"
+        mods_directory = self._mods_directory()
+        source = mods_directory / name
+        target = mods_directory / target_name
+        if source.is_symlink() or not source.is_file():
+            raise ValueError(f"Mod file not found: {name}")
+        if target.exists():
+            raise ValueError(f"Target file already exists: {target_name}")
+        try:
+            os.replace(source, target)
+        except OSError as error:
+            raise ValueError(f"Cannot modify mod file {name}: {error}") from error
+        return {"file": target_name, "enabled": enabled, "disabled": not enabled}
+
+    def delete_mod(self, filename: str) -> dict[str, Any]:
+        """Permanently remove a mod file from mods/."""
+        name = self._mod_file_name(filename)
+        mods_directory = self._mods_directory()
+        path = mods_directory / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Mod file not found: {name}")
+        try:
+            path.unlink()
+        except OSError as error:
+            raise ValueError(f"Cannot delete mod file {name}: {error}") from error
+        return {"file": name, "deleted": True}
+
+    # ---------- mod config files ----------
+
+    def _config_root(self) -> Path:
+        server_directory, _ = self._paths()
+        return server_directory / "config"
+
+    @staticmethod
+    def _resolve_text_path(root: Path, relative: str) -> Path:
+        """Resolve a config file path strictly inside ``root``."""
+        if not isinstance(relative, str) or not relative:
+            raise ValueError("Config path cannot be empty")
+        if (
+            Path(relative).drive
+            or Path(relative).is_absolute()
+            or "\\" in relative
+            or "\x00" in relative
+        ):
+            raise ValueError("Invalid config path")
+        if ".DS_Store" in Path(relative).parts:
+            raise ValueError(".DS_Store files are not editable")
+        root = root.resolve()
+        raw = root / relative
+        if raw.is_symlink():
+            raise ValueError("Symlinked config files are not editable")
+        candidate = raw.resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            raise ValueError("Config file not found")
+        return candidate
+
+    def _resolve_config_path(self, relative: str) -> Path:
+        return self._resolve_text_path(self._config_root(), relative)
+
+    def _resolve_plugin_config_path(self, plugin_id: str, relative: str) -> Path:
+        self._validate_plugin_id(plugin_id)
+        if plugin_id in (".", "..") or "/" in plugin_id or "\\" in plugin_id:
+            raise ValueError("Invalid plugin id")
+        return self._resolve_text_path(Path("config") / plugin_id, relative)
+
+    def mod_configs(self) -> dict[str, Any]:
+        """Every file under the server's config/ directory (relative paths)."""
+        root = self._config_root()
+        files: list[dict[str, Any]] = []
+        if root.is_dir():
+            for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                dirnames[:] = sorted(
+                    directory
+                    for directory in dirnames
+                    if not (Path(dirpath) / directory).is_symlink()
+                )
+                for filename in sorted(filenames):
+                    path = Path(dirpath) / filename
+                    if filename == ".DS_Store" or path.is_symlink():
+                        continue
+                    try:
+                        stat = path.stat()
+                    except OSError:
+                        continue
+                    files.append(
+                        {
+                            "path": path.relative_to(root).as_posix(),
+                            "name": filename,
+                            "size": stat.st_size,
+                            "mtime": stat.st_mtime,
+                        }
+                    )
+        return {"path": str(root), "files": files}
+
+    @staticmethod
+    def _read_text_config(path: Path, relative: str) -> dict[str, Any]:
+        """Read a config file as text; binary / oversized files are reported read-only."""
+        try:
+            stat = path.stat()
+            raw = path.read_bytes()
+        except OSError as error:
+            raise ValueError(f"Cannot read config file: {error}") from error
+        base = {
+            "path": relative,
+            "size": stat.st_size,
+            "mtime": stat.st_mtime,
+        }
+        if stat.st_size > _MAX_MOD_CONFIG_BYTES:
+            return {**base, "editable": False, "reason": "too_large", "content": None}
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        body = raw[3:] if bom else raw
+        if b"\x00" in body:
+            return {**base, "editable": False, "reason": "binary", "content": None}
+        encoding = "utf-8"
+        try:
+            text = body.decode("utf-8")
+        except UnicodeDecodeError:
+            # ISO-8859-1 can decode every byte; it preserves legacy .properties files
+            # and is a safe fallback for small non-UTF-8 configs.
+            encoding = "latin-1"
+            text = body.decode("latin-1")
+        crlf = body.count(b"\r\n")
+        line_ending = "crlf" if crlf and crlf * 2 >= body.count(b"\n") else "lf"
+        return {
+            **base,
+            "editable": True,
+            "reason": None,
+            "content": text,
+            "encoding": encoding,
+            "bom": bom,
+            "line_ending": line_ending,
+        }
+
+    @staticmethod
+    def _write_text_config(path: Path, relative: str, content: str) -> dict[str, Any]:
+        """Write a config file atomically, preserving encoding, BOM and line endings."""
+        if not isinstance(content, str):
+            raise ValueError("Config content must be text")
+        if len(content) > _MAX_MOD_CONFIG_CHARS:
+            raise ValueError("Config file is too large to save")
+        try:
+            raw = path.read_bytes()
+            original_mode = path.stat().st_mode & 0o7777
+        except OSError as error:
+            raise ValueError(f"Cannot read config file: {error}") from error
+        bom = raw.startswith(b"\xef\xbb\xbf")
+        body = raw[3:] if bom else raw
+        encoding = "utf-8"
+        try:
+            body.decode("utf-8")
+        except UnicodeDecodeError:
+            encoding = "latin-1"
+        crlf = body.count(b"\r\n")
+        line_ending = "crlf" if crlf and crlf * 2 >= body.count(b"\n") else "lf"
+        try:
+            encoded = content.encode(encoding)
+        except UnicodeEncodeError as error:
+            raise ValueError(f"Content cannot be encoded as {encoding}: {error}") from error
+        if line_ending == "crlf":
+            encoded = encoded.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+        if bom:
+            encoded = b"\xef\xbb\xbf" + encoded
+        if len(encoded) > _MAX_MOD_CONFIG_BYTES:
+            raise ValueError("Config file is too large to save")
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(encoded)
+            os.chmod(temporary, original_mode)
+            os.replace(temporary, path)
+        except OSError as error:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise ValueError(f"Cannot write config file: {error}") from error
+        try:
+            stat = path.stat()
+        except OSError:
+            stat = None
+        return {
+            "path": relative,
+            "size": stat.st_size if stat is not None else len(encoded),
+            "mtime": stat.st_mtime if stat is not None else None,
+        }
+
+    def read_mod_config(self, relative: str) -> dict[str, Any]:
+        return self._read_text_config(self._resolve_config_path(relative), relative)
+
+    def update_mod_config(self, relative: str, content: str) -> dict[str, Any]:
+        return self._write_text_config(self._resolve_config_path(relative), relative, content)
+
+    # ---------- plugin config files ----------
+
+    def plugin_configs(self) -> dict[str, Any]:
+        """Every file under every loaded plugin's ``config/<plugin_id>/`` folder."""
+
+        def collect() -> list[dict[str, Any]]:
+            metadata = self.server.get_all_metadata()
+            files: list[dict[str, Any]] = []
+            for plugin_id, item in sorted(metadata.items()):
+                plugin_type = getattr(self.server.get_plugin_type(plugin_id), "name", None)
+                if plugin_type == "builtin":
+                    continue
+                root = Path("config") / plugin_id
+                if not root.is_dir():
+                    continue
+                for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+                    dirnames[:] = sorted(
+                        directory
+                        for directory in dirnames
+                        if not (Path(dirpath) / directory).is_symlink()
+                    )
+                    for filename in sorted(filenames):
+                        path = Path(dirpath) / filename
+                        if filename == ".DS_Store" or path.is_symlink():
+                            continue
+                        try:
+                            stat = path.stat()
+                        except OSError:
+                            continue
+                        files.append(
+                            {
+                                "plugin_id": plugin_id,
+                                "plugin_name": self._string_or_none(getattr(item, "name", plugin_id)),
+                                "path": path.relative_to(root).as_posix(),
+                                "name": filename,
+                                "size": stat.st_size,
+                                "mtime": stat.st_mtime,
+                            }
+                        )
+            return files
+
+        return {"files": self.call(collect)}
+
+    def read_plugin_config(self, plugin_id: str, relative: str) -> dict[str, Any]:
+        return self._read_text_config(self._resolve_plugin_config_path(plugin_id, relative), relative)
+
+    def update_plugin_config(self, plugin_id: str, relative: str, content: str) -> dict[str, Any]:
+        return self._write_text_config(
+            self._resolve_plugin_config_path(plugin_id, relative), relative, content
+        )
 
     def _sync_instant_keys(self, current: dict[str, str]) -> None:
         """Fold server commands that apply immediately (e.g. whitelist on/off) into

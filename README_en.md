@@ -2,13 +2,13 @@
 
 **English** | [中文](README.md)
 
-An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serves a password-protected web dashboard for your Minecraft server: a live console, player management, an online `server.properties` editor and resource usage charts.
+An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serves a password-protected web dashboard for your Minecraft server: a live console, player management, online plugin and mod management, an online `server.properties` editor, mod-config editing and resource usage charts.
 
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
-- **Version**: 1.0.1
+- **Version**: 1.1.0
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
-- **Python packages**: `fastapi`, `uvicorn[standard]`, `psutil`
+- **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`
 
 ---
 
@@ -35,10 +35,30 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ![Player roster](docs/img/玩家管理-玩家列表.png)
 
+### Plugins & Mods
+
+Plugins and mods share one tab, switched with two in-page sub-tabs: Plugins / Mods. Clicking the per-row "Config" button opens an animated modal where config files are edited.
+
+**Plugins**
+
+- **Plugin list**: shows loaded, disabled and not-loaded plugins with their file states; loaded plugins can be disabled, disabled plugins can be enabled, and not-loaded plugins (e.g. those that failed to load at startup) can be loaded back with one click
+- **Check updates / Update**: uses the official MCDR plugin catalogue commands `!!MCDR plugin checkupdate` / `!!MCDR plugin install -U -y`. Results are shown as top-right toast notifications, plugins with updates are highlighted in yellow with the version change, plugins without updates no longer show the "Update" button, and a one-click "check all" is available. The outcome follows MCDR's actual output: success reports "Plugin updated", failures and timeouts say so explicitly and point to the live console; the panel itself is excluded from "update all"
+- **Disable / Enable**: calls `!!MCDR plugin disable / enable`; plugins are renamed to `.disabled` and restored per MCDR conventions. "Disable / Delete" are tucked into a per-row "⋯" menu so destructive actions never sit next to everyday ones
+- **Config files**: browse and edit files under each plugin's `config/<plugin_id>/` folder in a modal; saving preserves the original encoding (UTF-8 / Latin-1), BOM and line endings. Binary files and files over 1 MiB are read-only, and `.DS_Store` files are filtered out
+- **Delete**: MCDR has no delete command, so the panel unloads a loaded plugin through MCDR first, then removes the plugin file; disabled / not-loaded files can be removed directly
+- Minecraft Web Manager itself cannot be disabled, deleted or updated from the panel, so the dashboard never takes itself down; **reloading it is allowed** — the panel briefly goes offline (~10 seconds) and comes back automatically, and the page's WebSocket reconnects on its own. To update the panel itself, run `!!MCDR plugin install -U -y minecraft_web_manager` followed by `!!MCDR reload plugin minecraft_web_manager` in the MCDR console
+- Management buttons are disabled while a plugin operation is in flight to prevent duplicate triggers; a rejected update check (e.g. another install task running) is never reported as "all up to date"
+
+**Mods**
+
+- **Mod files**: upload `.jar` files into the server's `mods/` folder (an existing file name asks for confirmation before overwriting); enable / disable by renaming `foo.jar` ↔ `foo.jar.disabled`; deleting permanently removes the file. Uploads, enable/disable and deletes only take effect after a **server restart**
+- **Config files**: browse every file under the server's `config/` directory in a modal, open one and edit it, then save. The original encoding (UTF-8 / Latin-1), BOM and line endings are preserved. Binary files and files over 1 MiB are read-only, and `.DS_Store` files are filtered out. Clicking "Config" on a mod pre-fills the filter with that mod's id / name so its own files come up first instead of the whole directory
+- The World sidebar keeps a quick "Loaded mods" list; the Plugins & Mods page is the full management surface
+
 ### World
 
 - **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
-- **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder
+- **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder, and disabled files are marked as such. Full management lives in the "Plugins & Mods" page
 
 ![World](docs/img/world.png)
 
@@ -140,7 +160,7 @@ The three Minecraft-side settings can be edited right from the dashboard under *
 
 ## Security notes
 
-The dashboard has full control over your server — arbitrary commands, bans, config changes — so expose it carefully:
+The dashboard has full control over your server — arbitrary commands, bans, config changes, plugin/mod management and file edits — so expose it carefully:
 
 - It **listens on `127.0.0.1` by default**. Keeping that and connecting through an SSH tunnel is the safest way to reach it remotely
 - If you must expose it publicly, put it behind a reverse proxy such as Nginx or Caddy with HTTPS enabled. The plugin **does not provide TLS**; over plain HTTP your password and token travel in the clear
@@ -165,7 +185,8 @@ The dashboard has full control over your server — arbitrary commands, bans, co
 - **Resource history is kept in memory**, so it resets to empty whenever MCDR restarts or the plugin is reloaded
 - **World seed, name and difficulty are read from save files**, which only update when the server writes them to disk — they can lag reality by minutes
 - **Player IPs and UUIDs are parsed from server output**, so unusual log formats may prevent capture. Players recovered after a plugin reload have no join time or IP
-- **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only
+- **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only. Upload, enable/disable and delete operate on `.jar` files and do not depend on the loader
+- **Plugin check updates / updates require network access to the MCDR plugin catalogue**, and only packed plugins (`.mcdr` / `.pyz`) can be updated; detailed output appears in the live console. The panel itself cannot be updated from the panel; run `!!MCDR plugin install -U -y minecraft_web_manager` and then `!!MCDR reload plugin minecraft_web_manager` in the MCDR console. The panel itself CAN be reloaded from the panel — it briefly goes offline and comes back automatically
 - **Bot detection**: classic Carpet bots are matched by their offline UUID. TIS/AMS/RMS-style extensions may give bots Mojang-resolved or random v4 UUIDs, which only name rules + usercache signals can catch. Name rules only apply to players with no usercache record; use `not_bot_names` or the per-row "unmark" action to force a real-player classification
 - **Ping is unavailable on vanilla servers** and therefore not shown
 - The dashboard UI currently supports Simplified Chinese and English

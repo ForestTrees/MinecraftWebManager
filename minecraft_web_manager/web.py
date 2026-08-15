@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, File, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel, Field
 
@@ -113,6 +113,15 @@ class PluginReloadRequest(BaseModel):
     plugin_id: str = Field(min_length=1, max_length=64)
 
 
+class PluginOperationRequest(BaseModel):
+    plugin_id: str | None = Field(default=None, max_length=64)
+    file_name: str | None = Field(default=None, max_length=255)
+
+
+class PluginConfigUpdateRequest(BaseModel):
+    content: str = Field(max_length=1_000_000)
+
+
 class PropertiesUpdateRequest(BaseModel):
     changes: dict[str, str] = Field(default_factory=dict)
 
@@ -128,6 +137,10 @@ class PlayerActionRequest(BaseModel):
 class BotFlagRequest(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     is_bot: bool = True
+
+
+class ModConfigUpdateRequest(BaseModel):
+    content: str = Field(max_length=1_000_000)
 
 
 class EventHub:
@@ -176,7 +189,12 @@ class EventHub:
 
     def publish(self, event: dict[str, Any]) -> None:
         if self.ready.wait(timeout=1.0) and self.loop is not None:
-            asyncio.run_coroutine_threadsafe(self._publish(event), self.loop)
+            try:
+                asyncio.run_coroutine_threadsafe(self._publish(event), self.loop)
+            except RuntimeError:
+                # The web loop is shutting down (e.g. the panel is reloading
+                # itself); the event is dropped instead of failing the caller.
+                pass
 
 
 class WebService:
@@ -249,7 +267,7 @@ class WebService:
     def _build_app(self) -> FastAPI:
         # Interactive API docs are disabled: they were publicly reachable without
         # authentication and reveal the whole command surface of the panel.
-        app = FastAPI(title="Minecraft Web Manager", version="1.0.1", docs_url=None, openapi_url=None, redoc_url=None)
+        app = FastAPI(title="Minecraft Web Manager", version="1.1.0", docs_url=None, openapi_url=None, redoc_url=None)
 
         @app.middleware("http")
         async def renew_session(request: Request, call_next):
@@ -456,12 +474,228 @@ class WebService:
             self.publish("status", {"event": "plugin_reload", "plugin_id": body.plugin_id, "by": user["sub"]})
             return result
 
+        @app.post("/api/plugins/check_update")
+        async def plugin_check_update(
+            body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.plugin_check_update, body.plugin_id, lambda line: self.publish("console", line)
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "plugin_check_update", "plugin_id": body.plugin_id, "by": user["sub"]})
+            return result
+
+        @app.post("/api/plugins/update")
+        async def plugin_update(
+            body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.plugin_update, body.plugin_id, lambda line: self.publish("console", line)
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "plugin_update", "plugin_id": body.plugin_id, "by": user["sub"]})
+            return result
+
+        @app.post("/api/plugins/disable")
+        async def plugin_disable(
+            body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            if not body.plugin_id:
+                raise HTTPException(status_code=400, detail="plugin_id is required")
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.plugin_disable, body.plugin_id, lambda line: self.publish("console", line)
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "plugin_disabled", "plugin_id": body.plugin_id, "by": user["sub"]})
+            return result
+
+        @app.post("/api/plugins/enable")
+        async def plugin_enable(
+            body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            if not body.file_name:
+                raise HTTPException(status_code=400, detail="file_name is required")
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.plugin_enable, body.file_name, lambda line: self.publish("console", line)
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "plugin_enabled", "file_name": body.file_name, "by": user["sub"]})
+            return result
+
+        @app.post("/api/plugins/load")
+        async def plugin_load(
+            body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            if not body.file_name:
+                raise HTTPException(status_code=400, detail="file_name is required")
+            try:
+                result = await asyncio.to_thread(self.bridge.plugin_load, body.file_name)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "plugin_loaded", "file_name": body.file_name, "by": user["sub"]})
+            return result
+
+        @app.post("/api/plugins/delete")
+        async def plugin_delete(
+            body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.plugin_delete, body.plugin_id, body.file_name, lambda line: self.publish("console", line)
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "plugin_deleted", "plugin_id": body.plugin_id, "file_name": body.file_name, "by": user["sub"]})
+            return result
+
+        @app.get("/api/plugins/configs")
+        async def plugin_configs(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                return await asyncio.to_thread(self.bridge.plugin_configs)
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.get("/api/plugins/configs/{plugin_id}/{rel_path:path}")
+        async def read_plugin_config(
+            plugin_id: str, rel_path: str, _: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                return await asyncio.to_thread(self.bridge.read_plugin_config, plugin_id, rel_path)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.put("/api/plugins/configs/{plugin_id}/{rel_path:path}")
+        async def update_plugin_config(
+            plugin_id: str,
+            rel_path: str,
+            body: PluginConfigUpdateRequest,
+            user: dict[str, Any] = Depends(require_user),
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.update_plugin_config, plugin_id, rel_path, body.content
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish(
+                "status",
+                {"event": "plugin_config_saved", "plugin_id": plugin_id, "path": rel_path, "by": user["sub"]},
+            )
+            return result
+
         @app.get("/api/mods")
         async def mods(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
             try:
                 return {"mods": await asyncio.to_thread(self.bridge.mods)}
             except Exception as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.post("/api/mods/upload")
+        async def upload_mod(
+            user: dict[str, Any] = Depends(require_user),
+            file: UploadFile = File(...),
+            overwrite: bool = Query(False),
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.upload_mod, file.filename or "", file.file, overwrite)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "mod_upload", "file": result["file"], "by": user["sub"]})
+            return result
+
+        @app.post("/api/mods/{filename}/disable")
+        async def disable_mod(
+            filename: str, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.set_mod_enabled, filename, False)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "mod_disabled", "file": result["file"], "by": user["sub"]})
+            return result
+
+        @app.post("/api/mods/{filename}/enable")
+        async def enable_mod(
+            filename: str, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.set_mod_enabled, filename, True)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "mod_enabled", "file": result["file"], "by": user["sub"]})
+            return result
+
+        @app.delete("/api/mods/{filename}")
+        async def delete_mod(
+            filename: str, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.delete_mod, filename)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "mod_deleted", "file": result["file"], "by": user["sub"]})
+            return result
+
+        @app.get("/api/mods/configs")
+        async def mod_configs(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                return await asyncio.to_thread(self.bridge.mod_configs)
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.get("/api/mods/configs/{rel_path:path}")
+        async def read_mod_config(rel_path: str, _: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                return await asyncio.to_thread(self.bridge.read_mod_config, rel_path)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.put("/api/mods/configs/{rel_path:path}")
+        async def update_mod_config(
+            rel_path: str, body: ModConfigUpdateRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.update_mod_config, rel_path, body.content)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "mod_config_saved", "path": rel_path, "by": user["sub"]})
+            return result
 
         @app.get("/api/server/properties")
         async def server_properties(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:

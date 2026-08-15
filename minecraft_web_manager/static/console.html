@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>__MWM_PANEL_TITLE__</title>
     <meta name="mwm-panel-title" content="__MWM_PANEL_TITLE__" />
-    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=20" />
-    <link rel="stylesheet" href="/assets/style.css?v=20" />
-    <script src="/assets/theme.js?v=20"></script>
-    <script src="/assets/i18n.js?v=20"></script>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=36" />
+    <link rel="stylesheet" href="/assets/style.css?v=36" />
+    <script src="/assets/theme.js?v=36"></script>
+    <script src="/assets/i18n.js?v=36"></script>
   </head>
   <body>
     <div class="app">
@@ -24,6 +24,7 @@
         <nav class="nav" id="nav">
           <button class="nav-item active" data-view="console" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span data-i18n="nav_console">实时控制台</span></button>
           <button class="nav-item" data-view="players" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg><span data-i18n="nav_players">玩家管理</span></button>
+          <button class="nav-item" data-view="manage" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg><span data-i18n="nav_manage">插件与 Mod</span></button>
           <button class="nav-item" data-view="world" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg><span data-i18n="nav_world">World</span></button>
           <button class="nav-item" data-view="performance" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3 8 4-16 3 8h4"/></svg><span data-i18n="nav_performance">服务器状态</span></button>
         </nav>
@@ -212,6 +213,59 @@
             </div>
           </section>
 
+          <!-- 插件与 Mod 管理 -->
+          <section class="view" data-view-panel="manage">
+            <div class="panel">
+              <div class="panel-head">
+                <h2 data-i18n="manage_title">插件与 Mod 管理</h2>
+              </div>
+
+              <div class="manage-toolbar">
+                <div class="subtabs" id="manage-subtabs" role="group">
+                  <button type="button" class="active" data-manage-subtab="plugins"><span data-i18n="nav_plugins">插件</span><span class="tab-count" id="plugins-tab-count"></span></button>
+                  <button type="button" data-manage-subtab="mods"><span data-i18n="nav_mods">Mod</span><span class="tab-count" id="mods-tab-count"></span></button>
+                </div>
+                <div class="subview-head" data-manage-toolbar="plugins">
+                  <div class="inline-actions">
+                    <button id="plugins-check-all" class="btn ghost sm" type="button" data-plugin-action="check_all" data-i18n="plugins_check_all">检查全部更新</button>
+                    <button id="plugins-update-all" class="btn sm" type="button" data-plugin-action="update_all" data-i18n="plugins_update_all">全部更新</button>
+                  </div>
+                </div>
+                <div class="subview-head" data-manage-toolbar="mods" hidden>
+                  <div class="inline-actions">
+                    <button id="mod-upload" class="btn sm" type="button" data-i18n="mod_upload">上传 Mod</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="subview active" data-manage-subview="plugins">
+                <p class="hint" data-i18n="plugins_hint">检查更新与更新走 MCDR 官方插件仓库；禁用、删除需谨慎操作。</p>
+                <div class="table-scroll">
+                  <table class="data-table manage-table manage-plugins">
+                    <thead>
+                      <tr><th data-i18n="th_plugin">插件</th><th data-i18n="th_file">ID / 文件</th><th data-i18n="th_status">状态</th><th data-i18n="th_actions">操作</th></tr>
+                    </thead>
+                    <tbody id="plugins-table-body"><tr><td colspan="4" data-i18n="loading">正在读取…</td></tr></tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="subview" data-manage-subview="mods">
+                <p class="hint" data-i18n="mods_hint">上传、禁用、删除或修改配置后，需<strong>重启服务端</strong>才会生效。</p>
+                <div class="table-scroll">
+                  <table class="data-table manage-table manage-mods">
+                    <thead>
+                      <tr><th data-i18n="th_mod">Mod</th><th data-i18n="th_file">文件</th><th data-i18n="th_status">状态</th><th data-i18n="th_size">大小</th><th data-i18n="th_actions">操作</th></tr>
+                    </thead>
+                    <tbody id="mods-table-body"><tr><td colspan="5" data-i18n="loading">正在读取…</td></tr></tbody>
+                  </table>
+                </div>
+                <input id="mod-file-input" type="file" accept=".jar" hidden />
+              </div>
+
+            </div>
+          </section>
+
           <!-- World -->
           <section class="view" data-view-panel="world">
             <div class="world-layout">
@@ -302,7 +356,36 @@
       </div>
     </div>
 
-    <script src="/assets/chart.js?v=20"></script>
-    <script src="/assets/console.js?v=20"></script>
+    <div id="config-modal" class="modal-overlay config-modal" hidden>
+      <div class="modal-card config-modal-card">
+        <div class="config-modal-head">
+          <div class="config-modal-heading">
+            <h3 id="config-modal-title">配置文件</h3>
+            <p class="hint mono" id="config-modal-path"></p>
+          </div>
+          <button type="button" id="config-modal-close" class="btn ghost sm" data-i18n="cancel">取消</button>
+        </div>
+        <div class="config-modal-layout">
+          <div class="config-modal-list">
+            <div class="config-modal-list-head">
+              <input id="config-modal-filter" class="field sm-field" data-i18n-placeholder="config_modal_filter_ph" placeholder="筛选配置文件…" autocomplete="off" />
+              <span class="hint" id="config-modal-count"></span>
+            </div>
+            <ul id="config-modal-files" class="config-file-list"><li class="empty" data-i18n="loading">正在读取…</li></ul>
+          </div>
+          <div class="config-modal-editor-pane">
+            <div class="config-modal-editor-head">
+              <span id="config-modal-editor-name" class="config-modal-editor-name">--</span>
+              <button id="config-modal-save" class="btn sm" type="button" disabled data-i18n="mod_config_save">保存配置</button>
+            </div>
+            <textarea id="config-modal-editor" class="config-editor" spellcheck="false" disabled></textarea>
+            <p id="config-modal-note" class="hint"></p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="/assets/chart.js?v=36"></script>
+    <script src="/assets/console.js?v=36"></script>
   </body>
 </html>

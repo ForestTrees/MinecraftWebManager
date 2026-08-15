@@ -1,4 +1,6 @@
 fastapi>=0.115,<1.0
 # standard installs the WebSocket implementation used by /ws/events
 uvicorn[standard]>=0.30,<1.0
+# multipart parsing for mod uploads (/api/mods/upload)
+python-multipart>=0.0.9,<1.0
 psutil>=6.0,<8.0

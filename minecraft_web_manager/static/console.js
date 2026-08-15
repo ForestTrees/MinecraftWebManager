@@ -1,9 +1,9 @@
-const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting' };
+const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting', mods: [], manageSubtab: 'plugins', manageBusy: false, configModal: { type: null, files: [], current: null, dirty: false }, pluginUpdates: {}, pluginChecked: new Set() };
 const $ = (id) => document.getElementById(id);
 const T = (key, params) => (window.MWMI18N ? window.MWMI18N.t(key, params) : key);
 
 function viewTitle(view) {
-  const keys = { console: 'nav_console', players: 'nav_players', world: 'nav_world', performance: 'nav_performance' };
+  const keys = { console: 'nav_console', players: 'nav_players', manage: 'nav_manage', world: 'nav_world', performance: 'nav_performance' };
   return T(keys[view] || 'crumb');
 }
 
@@ -117,7 +117,7 @@ const actionButtons = {
 
 async function api(path, options = {}) {
   const headers = { ...(options.headers || {}) };
-  if (options.body) headers['Content-Type'] = 'application/json';
+  if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
   const response = await fetch(path, { ...options, headers });
   if (response.status === 401) return logout();
   if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || response.statusText);
@@ -211,7 +211,7 @@ function showToast(message, { type = 'info' } = {}) {
   setTimeout(() => toast.remove(), 4000);
 }
 
-function confirmDialog(message, { title = T('confirm_title'), confirmText = T('confirm_ok') } = {}) {
+function confirmDialog(message, { title = T('confirm_title'), confirmText = T('confirm_ok'), danger = true } = {}) {
   return new Promise((resolve) => {
     const overlay = $('confirm-modal');
     const confirmButton = $('confirm-modal-confirm');
@@ -219,6 +219,7 @@ function confirmDialog(message, { title = T('confirm_title'), confirmText = T('c
     $('confirm-modal-title').textContent = title;
     $('confirm-modal-message').textContent = message;
     confirmButton.textContent = confirmText;
+    confirmButton.className = danger ? 'btn danger' : 'btn';
     overlay.hidden = false;
     const cleanup = (result) => {
       overlay.hidden = true;
@@ -274,7 +275,10 @@ async function refreshOverview() {
     updateOverviewMetrics(await api('/api/performance'));
     const { plugins } = await api('/api/plugins');
     renderPlugins(plugins);
-    commandSuggestionPool = [...BASE_COMMAND_SUGGESTIONS, ...plugins.map((p) => `!!MCDR plugin reload ${p.id}`)];
+    commandSuggestionPool = [
+      ...BASE_COMMAND_SUGGESTIONS,
+      ...plugins.filter((p) => p.state === 'loaded' && p.id).map((p) => `!!MCDR plugin reload ${p.id}`),
+    ];
   } catch (error) { console.warn(error); }
 }
 
@@ -733,55 +737,761 @@ async function refreshProperties() {
 }
 
 /* ---------- plugins + mods ---------- */
+// While a plugin/mod operation is in flight every management button is disabled
+// so the same action cannot be double-clicked or started concurrently.
+function setManageBusy(busy) {
+  state.manageBusy = busy;
+  document.querySelectorAll('[data-plugin-action], [data-mod-action], [data-reload-plugin]').forEach((button) => {
+    button.disabled = busy;
+  });
+  const upload = $('mod-upload');
+  if (upload) upload.disabled = busy;
+  const updateAll = $('plugins-update-all');
+  if (updateAll) updateAll.disabled = busy || updateAll.dataset.updateCount === '0';
+}
+
+function pluginStateTag(plugin) {
+  const key = plugin.state === 'disabled'
+    ? 'plugin_state_disabled'
+    : plugin.state === 'unloaded'
+      ? 'plugin_state_unloaded'
+      : 'plugin_state_loaded';
+  const className = plugin.state === 'loaded' ? 'tag' : 'tag muted';
+  return `<span class="${className}">${escapeHtml(T(key))}</span>`;
+}
+
+function pluginActionsHtml(plugin) {
+  if (plugin.state !== 'loaded') {
+    const buttons = [];
+    if (plugin.state === 'disabled') {
+      buttons.push(`<button class="link-btn" data-plugin-action="enable" data-file="${escapeHtml(plugin.file_name)}" data-name="${escapeHtml(plugin.file_name)}" type="button">${escapeHtml(T('plugin_enable'))}</button>`);
+    } else if (plugin.state === 'unloaded') {
+      buttons.push(`<button class="link-btn" data-plugin-action="load" data-file="${escapeHtml(plugin.file_name)}" data-name="${escapeHtml(plugin.file_name)}" type="button">${escapeHtml(T('plugin_load'))}</button>`);
+    }
+    buttons.push(`<button class="link-btn danger" data-plugin-action="delete" data-file="${escapeHtml(plugin.file_name)}" data-name="${escapeHtml(plugin.file_name)}" type="button">${escapeHtml(T('plugin_delete'))}</button>`);
+    return `<div class="row-actions">${buttons.join('')}</div>`;
+  }
+
+  const buttons = [];
+  if (!plugin.builtin) {
+    buttons.push(`<button class="link-btn" data-plugin-action="check_update" data-id="${escapeHtml(plugin.id)}" type="button">${escapeHtml(T('plugin_check_update'))}</button>`);
+    const update = state.pluginUpdates[plugin.id];
+    // Updating this very plugin would kill the web panel mid-request (MCDR
+    // reloads the plugin right after installing), so no update button on self.
+    if (plugin.updatable && update && !plugin.self) {
+      buttons.push(`<button class="link-btn" data-plugin-action="update" data-id="${escapeHtml(plugin.id)}" data-name="${escapeHtml(plugin.name || plugin.id)}" type="button">${escapeHtml(T('plugin_update'))}</button>`);
+    }
+    buttons.push(`<button class="link-btn" data-plugin-action="configs" data-id="${escapeHtml(plugin.id)}" data-name="${escapeHtml(plugin.name || plugin.id)}" type="button">${escapeHtml(T('mod_config'))}</button>`);
+  }
+  if (!plugin.builtin) {
+    // Reloading the panel itself is allowed: the panel restarts and the page's
+    // WebSocket reconnects automatically; only update/disable/delete stay blocked.
+    buttons.push(`<button class="link-btn" data-plugin-action="reload" data-id="${escapeHtml(plugin.id)}"${plugin.self ? ' data-self="1"' : ''} type="button">${escapeHtml(T('reload'))}</button>`);
+  }
+  if (!plugin.self && !plugin.builtin) {
+    // Low-frequency / destructive actions live behind a "⋯" menu so the row
+    // stays readable and 删除 is not sitting right next to everyday actions.
+    buttons.push(`<span class="row-menu-wrap">
+      <button class="link-btn row-menu-toggle" data-row-menu-toggle type="button" aria-label="${escapeHtml(T('plugin_more_actions'))}">⋯</button>
+      <span class="row-menu" hidden>
+        <button class="link-btn" data-plugin-action="disable" data-id="${escapeHtml(plugin.id)}" data-name="${escapeHtml(plugin.name || plugin.id)}" type="button">${escapeHtml(T('plugin_disable'))}</button>
+        <button class="link-btn danger" data-plugin-action="delete" data-id="${escapeHtml(plugin.id)}" data-name="${escapeHtml(plugin.name || plugin.id)}" type="button">${escapeHtml(T('plugin_delete'))}</button>
+      </span>
+    </span>`);
+  }
+  if (!buttons.length) {
+    buttons.push(`<span class="na">${escapeHtml(plugin.self ? T('current_plugin') : plugin.builtin ? T('plugin_builtin') : T('no_entries'))}</span>`);
+  }
+  return `<div class="row-actions">${buttons.join('')}</div>`;
+}
+
 function renderPlugins(plugins) {
-  $('plugins-count').textContent = T('plugins_count', { n: plugins.length });
-  $('plugins').innerHTML = plugins.map((p) => {
-    // Reloading this very plugin would stop the web server mid-request; that flow
-    // only works from the MCDR console.
-    const reloadButton = p.self
-      ? `<span class="na">${T('current_plugin')}</span>`
-      : `<button class="link-btn row-hover-action" data-reload-plugin="${escapeHtml(p.id)}" type="button">${T('reload')}</button>`;
+  const loaded = plugins.filter((plugin) => plugin.state === 'loaded');
+  if ($('plugins-count')) $('plugins-count').textContent = T('plugins_count', { n: loaded.length });
+  if ($('plugins-tab-count')) $('plugins-tab-count').textContent = String(plugins.length);
+  const updateAll = $('plugins-update-all');
+  if (updateAll) {
+    const updateCount = plugins.filter((plugin) => plugin.state === 'loaded' && !plugin.self && state.pluginUpdates[plugin.id]).length;
+    updateAll.dataset.updateCount = String(updateCount);
+    updateAll.disabled = updateCount === 0 || state.manageBusy;
+    updateAll.textContent = updateCount ? T('plugin_update_all_count', { n: updateCount }) : T('plugins_update_all');
+  }
+  const side = $('plugins');
+  if (side) {
+    side.innerHTML = loaded.map((p) => {
+      // Reloading the panel itself restarts it; the page's WebSocket reconnects
+      // automatically afterwards.
+      const reloadButton = `<button class="link-btn row-hover-action" data-reload-plugin="${escapeHtml(p.id)}"${p.self ? ' data-self="1"' : ''} type="button">${T('reload')}</button>`;
+      return `
+      <li class="entry-row">
+        <div>
+          <div class="p-name" title="${escapeHtml(p.name || p.id)}">${escapeHtml(p.name || p.id)}</div>
+          <div class="p-meta" title="${escapeHtml(`${p.id} · ${p.version || 'unknown'}`)}">${escapeHtml(p.id)} · ${escapeHtml(p.version || 'unknown')}</div>
+        </div>
+        ${reloadButton}
+      </li>`;
+    }).join('') || `<li>${T('no_plugins')}</li>`;
+  }
+  const body = $('plugins-table-body');
+  if (!body) return;
+  body.innerHTML = plugins.map((plugin) => {
+    const updateInfo = state.pluginUpdates[plugin.id];
+    const metaTitle = [
+      updateInfo ? `v${updateInfo.current} → v${updateInfo.latest}` : (plugin.version ? `v${plugin.version}` : ''),
+      state.pluginChecked.has(plugin.id) && !updateInfo ? T('plugin_up_to_date') : '',
+      plugin.description || '',
+    ].filter(Boolean).join(' · ');
+    const metaHtml = plugin.version || updateInfo ? `
+      <div class="p-meta" title="${escapeHtml(metaTitle)}">${updateInfo
+        ? `<span class="plugin-update">v${escapeHtml(updateInfo.current)} → v${escapeHtml(updateInfo.latest)}</span>`
+        : `v${escapeHtml(plugin.version)}`}${state.pluginChecked.has(plugin.id) && !updateInfo ? ` <span class="plugin-up-to-date">${escapeHtml(T('plugin_up_to_date'))}</span>` : ''}${plugin.description ? ' · ' + escapeHtml(plugin.description) : ''}</div>` : '';
     return `
-    <li class="entry-row">
-      <div>
-        <div class="p-name">${escapeHtml(p.name || p.id)}</div>
-        <div class="p-meta">${escapeHtml(p.id)} · ${escapeHtml(p.version || 'unknown')}</div>
-      </div>
-      ${reloadButton}
-    </li>`;
-  }).join('') || `<li>${T('no_plugins')}</li>`;
+    <tr>
+      <td>
+        <div class="p-name" title="${escapeHtml(plugin.name || plugin.file_name || plugin.id || '?')}">${escapeHtml(plugin.name || plugin.file_name || plugin.id || '?')}</div>
+        ${metaHtml}
+      </td>
+      <td class="mono" title="${escapeHtml(plugin.id || plugin.file_name || '--')}">${escapeHtml(plugin.id || plugin.file_name || '--')}</td>
+      <td>${pluginStateTag(plugin)}</td>
+      <td>${pluginActionsHtml(plugin)}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="4">${escapeHtml(T('no_plugins'))}</td></tr>`;
+}
+
+async function refreshPlugins() {
+  try {
+    const data = await api('/api/plugins');
+    renderPlugins(data.plugins || []);
+  } catch (error) {
+    const body = $('plugins-table-body');
+    if (body) body.innerHTML = `<tr><td colspan="4">${escapeHtml(T('load_failed', { error: error.message }))}</td></tr>`;
+  }
+}
+
+function applyPluginCheckResult(result) {
+  if (result.failed) return; // a rejected/failed check must not mark plugins "up to date"
+  for (const update of result.updates || []) {
+    if (update && update.plugin_id) {
+      state.pluginUpdates[update.plugin_id] = { current: update.current, latest: update.latest };
+      state.pluginChecked.add(update.plugin_id);
+    }
+  }
+  for (const pluginId of result.checked || []) {
+    state.pluginChecked.add(pluginId);
+    if (!(result.updates || []).some((update) => update.plugin_id === pluginId)) {
+      delete state.pluginUpdates[pluginId];
+    }
+  }
+  refreshPlugins();
+}
+
+function showPluginCheckToast(result) {
+  if (result.failed) {
+    showToast(T('plugin_check_failed_hint'), { type: 'error' });
+    return;
+  }
+  const updates = result.updates || [];
+  const checked = result.checked || [];
+  if (!checked.length) {
+    showToast(T('plugin_check_none'));
+    return;
+  }
+  if (updates.length) {
+    showToast(T('plugin_check_updates_found', { n: updates.length }));
+    for (const update of updates) {
+      showToast(`${update.plugin_id}: v${update.current} → v${update.latest}`);
+    }
+  } else {
+    showToast(T('plugin_check_all_up_to_date', { n: checked.length }));
+  }
+}
+
+/* ---------- config editor modal (shared by plugins & mods) ---------- */
+function configModalFiles() {
+  return (state.configModal.files || []).filter((file) => {
+    if (file.path === '.DS_Store') return false;
+    const filter = ($('config-modal-filter')?.value || '').trim().toLowerCase();
+    if (!filter) return true;
+    const haystack = state.configModal.type === 'plugin' ? `${file.plugin_id}/${file.path}` : file.path;
+    return haystack.toLowerCase().includes(filter);
+  });
+}
+
+function renderConfigModalList() {
+  const files = configModalFiles();
+  const count = $('config-modal-count');
+  if (count) count.textContent = T('plugins_count', { n: files.length });
+  const list = $('config-modal-files');
+  if (!list) return;
+  list.innerHTML = files.map((file, index) => {
+    const current = state.configModal.current;
+    const active = current && (
+      (state.configModal.type === 'plugin' && current.plugin_id === file.plugin_id && current.path === file.path) ||
+      (state.configModal.type === 'mod' && current.path === file.path)
+    );
+    const label = state.configModal.type === 'plugin'
+      ? `${file.plugin_name || file.plugin_id}/${file.path}`
+      : file.path;
+    return `
+      <li data-config-index="${index}" title="${escapeHtml(label)}" class="${active ? 'active' : ''}">
+        <span class="mono">${escapeHtml(label)}</span>
+        <span class="file-size">${formatBytes(file.size)}</span>
+      </li>`;
+  }).join('') || `<li class="empty">${escapeHtml(T('config_modal_no_files'))}</li>`;
+}
+
+async function refreshConfigModalFiles() {
+  const type = state.configModal.type;
+  if (!type) return;
+  const endpoint = type === 'plugin' ? '/api/plugins/configs' : '/api/mods/configs';
+  try {
+    const data = await api(endpoint);
+    state.configModal.files = (data.files || []).filter((file) => file.path !== '.DS_Store');
+    renderConfigModalList();
+  } catch (error) {
+    const list = $('config-modal-files');
+    if (list) list.innerHTML = `<li class="empty">${escapeHtml(T('load_failed', { error: error.message }))}</li>`;
+  }
+}
+
+function updateConfigModalSaveButton() {
+  const save = $('config-modal-save');
+  if (!save) return;
+  save.disabled = !(state.configModal.current && state.configModal.current.editable && state.configModal.dirty);
+}
+
+async function openConfigModal(type, filter) {
+  state.configModal = { type, files: [], current: null, dirty: false };
+  $('config-modal-title').textContent = T(type === 'plugin' ? 'config_modal_plugin_title' : 'config_modal_mod_title');
+  $('config-modal-path').textContent = '';
+  $('config-modal-editor-name').textContent = T('mod_config_editor_title');
+  $('config-modal-editor').value = '';
+  $('config-modal-editor').disabled = true;
+  $('config-modal-note').textContent = '';
+  $('config-modal-filter').value = filter || '';
+  $('config-modal').hidden = false;
+  updateConfigModalSaveButton();
+  renderConfigModalList();
+  await refreshConfigModalFiles();
+  const files = configModalFiles();
+  if (files.length === 1) await openConfigFile(files[0]);
+}
+
+async function closeConfigModal() {
+  const modal = $('config-modal');
+  if (modal.hidden) return;
+  if (state.configModal.dirty) {
+    const ok = await confirmDialog(T('mod_config_discard_confirm'), {
+      title: T('mod_config_discard_title'),
+      confirmText: T('mod_config_discard_ok'),
+    });
+    if (!ok) return;
+  }
+  state.configModal = { type: null, files: [], current: null, dirty: false };
+  modal.hidden = true;
+}
+
+async function openConfigFile(file, force = false) {
+  const current = state.configModal.current;
+  const same = current && (
+    (state.configModal.type === 'plugin' && current.plugin_id === file.plugin_id && current.path === file.path) ||
+    (state.configModal.type === 'mod' && current.path === file.path)
+  );
+  if (same && !force) return;
+  if (state.configModal.dirty) {
+    const ok = await confirmDialog(T('mod_config_discard_confirm'), {
+      title: T('mod_config_discard_title'),
+      confirmText: T('mod_config_discard_ok'),
+    });
+    if (!ok) return;
+    state.configModal.dirty = false;
+  }
+  let encodedPath;
+  try {
+    encodedPath = file.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+  } catch (error) {
+    showToast(T('mod_config_read_failed', { error: error.message }), { type: 'error' });
+    return;
+  }
+  const url = state.configModal.type === 'plugin'
+    ? `/api/plugins/configs/${encodeURIComponent(file.plugin_id)}/${encodedPath}`
+    : `/api/mods/configs/${encodedPath}`;
+  try {
+    const data = await api(url);
+    state.configModal.current = { ...file, ...data };
+    state.configModal.dirty = false;
+    $('config-modal-editor-name').textContent = data.path.split('/').pop() || data.path;
+    $('config-modal-path').textContent = state.configModal.type === 'plugin' ? `${file.plugin_id}/${data.path}` : data.path;
+    const editor = $('config-modal-editor');
+    const note = $('config-modal-note');
+    if (data.editable) {
+      editor.value = data.content;
+      editor.disabled = false;
+      note.textContent = T(state.configModal.type === 'plugin' ? 'plugin_config_note' : 'mod_config_note', { size: formatBytes(data.size) });
+    } else {
+      editor.value = '';
+      editor.disabled = true;
+      note.textContent = data.reason === 'too_large'
+        ? T('mod_config_too_large', { size: formatBytes(data.size) })
+        : T('mod_config_binary');
+    }
+    updateConfigModalSaveButton();
+    renderConfigModalList();
+  } catch (error) {
+    showToast(T('mod_config_read_failed', { error: error.message }), { type: 'error' });
+  }
+}
+
+async function saveConfigModalFile() {
+  const current = state.configModal.current;
+  if (!current || !current.editable || !state.configModal.dirty) return;
+  const confirmed = await confirmDialog(
+    T('mod_config_save_confirm', { name: current.path }),
+    { title: T('mod_config_save_title'), confirmText: T('save') }
+  );
+  if (!confirmed) return;
+  const encodedPath = current.path.split('/').map((segment) => encodeURIComponent(segment)).join('/');
+  const url = state.configModal.type === 'plugin'
+    ? `/api/plugins/configs/${encodeURIComponent(current.plugin_id)}/${encodedPath}`
+    : `/api/mods/configs/${encodedPath}`;
+  try {
+    await api(url, { method: 'PUT', body: JSON.stringify({ content: $('config-modal-editor').value }) });
+    state.configModal.dirty = false;
+    showToast(T('mod_config_saved', { name: current.path }));
+    refreshConfigModalFiles();
+    await closeConfigModal();
+  } catch (error) {
+    showToast(T('mod_config_save_failed', { error: error.message }), { type: 'error' });
+  }
 }
 
 async function refreshMods() {
   try {
-    const { mods } = await api('/api/mods');
-    $('mods-count').textContent = T('plugins_count', { n: mods.length });
-    $('mods').innerHTML = mods.map((m) => `
+    const data = await api('/api/mods');
+    state.mods = data.mods || [];
+    renderModsList(state.mods);
+  } catch (error) {
+    if ($('mods')) $('mods').innerHTML = `<li>${escapeHtml(T('load_failed', { error: error.message }))}</li>`;
+    const body = $('mods-table-body');
+    if (body) body.innerHTML = `<tr><td colspan="5">${escapeHtml(T('load_failed', { error: error.message }))}</td></tr>`;
+  }
+}
+
+function renderModsList(mods) {
+  if ($('mods-count')) $('mods-count').textContent = T('plugins_count', { n: mods.length });
+  if ($('mods-tab-count')) $('mods-tab-count').textContent = String(mods.length);
+  const side = $('mods');
+  if (side) {
+    side.innerHTML = mods.map((m) => `
       <li class="entry-row">
         <div>
-          <div class="p-name">${escapeHtml(m.name || m.file)}</div>
-          <div class="p-meta">${escapeHtml(m.id || m.file)}${m.version ? ' · ' + escapeHtml(m.version) : ''}</div>
+          <div class="p-name" title="${escapeHtml(m.name || m.file)}">${escapeHtml(m.name || m.file)}</div>
+          <div class="p-meta" title="${escapeHtml([m.id || m.file, m.version].filter(Boolean).join(' · '))}">${m.disabled ? `<span class="tag muted">${escapeHtml(T('mod_disabled'))}</span> ` : ''}${escapeHtml(m.id || m.file)}${m.version ? ' · ' + escapeHtml(m.version) : ''}</div>
         </div>
       </li>`).join('') || `<li>${T('no_mods')}</li>`;
-  } catch (error) {
-    $('mods').innerHTML = `<li>${escapeHtml(T('load_failed', { error: error.message }))}</li>`;
   }
+  const body = $('mods-table-body');
+  if (!body) return;
+  body.innerHTML = mods.map((m) => {
+    const status = m.disabled
+      ? `<span class="tag muted">${escapeHtml(T('mod_disabled'))}</span>`
+      : `<span class="tag">${escapeHtml(T('mod_enabled'))}</span>`;
+    const actions = `
+      <button class="link-btn" data-mod-action="${m.disabled ? 'enable' : 'disable'}" data-mod-file="${escapeHtml(m.file)}" type="button">${escapeHtml(T(m.disabled ? 'mod_enable' : 'mod_disable'))}</button>
+      <button class="link-btn" data-mod-action="configs" data-mod-file="${escapeHtml(m.file)}" data-mod-hint="${escapeHtml(m.id || m.name || m.file.replace(/\.jar(?:\.disabled)?$/i, ''))}" type="button">${escapeHtml(T('mod_config'))}</button>
+      <button class="link-btn danger" data-mod-action="delete" data-mod-file="${escapeHtml(m.file)}" type="button">${escapeHtml(T('mod_delete'))}</button>`;
+    const metaTitle = [m.version ? `v${m.version}` : '', m.description || ''].filter(Boolean).join(' · ');
+    return `
+      <tr>
+        <td>
+          <div class="p-name" title="${escapeHtml(m.name || m.file)}">${escapeHtml(m.name || m.file)}</div>
+          ${m.version || m.description ? `<div class="p-meta" title="${escapeHtml(metaTitle)}">${m.version ? `<span>v${escapeHtml(m.version)}</span>` : ''}${m.description ? ' · ' + escapeHtml(m.description) : ''}</div>` : ''}
+        </td>
+        <td class="mono" title="${escapeHtml(m.file)}">${escapeHtml(m.file)}</td>
+        <td>${status}</td>
+        <td>${formatBytes(m.size)}</td>
+        <td><div class="row-actions">${actions}</div></td>
+      </tr>`;
+  }).join('') || `<tr><td colspan="5">${escapeHtml(T('no_mods'))}</td></tr>`;
+}
+
+function setManageSubtab(subtab) {
+  state.manageSubtab = subtab;
+  document.querySelectorAll('#manage-subtabs button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.manageSubtab === subtab);
+  });
+  document.querySelectorAll('[data-manage-subview]').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.manageSubview === subtab);
+  });
+  document.querySelectorAll('[data-manage-toolbar]').forEach((panel) => {
+    panel.hidden = panel.dataset.manageToolbar !== subtab;
+  });
+  if (subtab === 'plugins') refreshPlugins();
+  else if (subtab === 'mods') refreshMods();
 }
 
 document.addEventListener('click', async (event) => {
   const button = event.target.closest('[data-reload-plugin]');
   if (!button) return;
   const pluginId = button.dataset.reloadPlugin;
-  const confirmed = await confirmDialog(T('reload_plugin_confirm', { id: pluginId }), { title: T('reload_plugin_title'), confirmText: T('reload') });
+  const isSelf = button.dataset.self === '1';
+  const confirmed = await confirmDialog(
+    isSelf ? T('reload_plugin_self_confirm') : T('reload_plugin_confirm', { id: pluginId }),
+    { title: T('reload_plugin_title'), confirmText: T('reload') }
+  );
   if (!confirmed) return;
+  setManageBusy(true);
   try {
     const result = await api('/api/plugins/reload', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
     showToast(result.accepted ? T('plugin_reloaded', { id: pluginId }) : T('plugin_reload_noop', { id: pluginId }), { type: result.accepted ? 'info' : 'error' });
     refreshOverview();
   } catch (error) {
     showToast(T('reload_failed', { error: error.message }), { type: 'error' });
+  } finally {
+    setManageBusy(false);
   }
 });
+
+/* ---------- row "⋯" menus (plugin disable/delete) ---------- */
+function closeRowMenus() {
+  document.querySelectorAll('.row-menu').forEach((menu) => {
+    menu.hidden = true;
+    menu.style.position = '';
+    menu.style.left = '';
+    menu.style.top = '';
+    menu.style.right = '';
+  });
+}
+
+function openRowMenu(toggle) {
+  const menu = toggle.nextElementSibling;
+  if (!menu) return;
+  const rect = toggle.getBoundingClientRect();
+  const gap = 4;
+  menu.hidden = false;
+  const menuWidth = menu.offsetWidth;
+  const menuHeight = menu.offsetHeight;
+  // The table sits in an overflow container, so an absolutely-positioned menu
+  // would be clipped. Anchor it to the button with viewport coordinates
+  // instead, clamped to the screen; flip it above the button when there is no
+  // room below (e.g. the last visible table row).
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+  let top = rect.bottom + gap;
+  if (top + menuHeight > window.innerHeight - 8) top = Math.max(8, rect.top - menuHeight - gap);
+  menu.style.position = 'fixed';
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.right = 'auto';
+}
+
+document.addEventListener('click', (event) => {
+  const toggle = event.target.closest('[data-row-menu-toggle]');
+  const menu = toggle ? toggle.nextElementSibling : null;
+  const wasOpen = menu && !menu.hidden;
+  closeRowMenus();
+  if (toggle && menu && !wasOpen) openRowMenu(toggle);
+});
+// A fixed-position menu would float detached from its button while scrolling,
+// so close it on any scroll (capture catches the table's inner scroller) and on resize.
+window.addEventListener('scroll', closeRowMenus, true);
+window.addEventListener('resize', closeRowMenus);
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeRowMenus();
+});
+
+/* ---------- plugin online management ---------- */
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-plugin-action]');
+  if (!button) return;
+  const action = button.dataset.pluginAction;
+  const pluginId = button.dataset.id || null;
+  const fileName = button.dataset.file || null;
+  const name = button.dataset.name || pluginId || fileName;
+
+  if (action === 'check_all' || action === 'update_all') {
+    if (action === 'update_all') {
+      const confirmed = await confirmDialog(T('plugin_update_all_confirm'), {
+        title: T('plugins_update_all'),
+        confirmText: T('plugins_update_all'),
+      });
+      if (!confirmed) return;
+    }
+    const endpoint = action === 'check_all' ? '/api/plugins/check_update' : '/api/plugins/update';
+    showToast(action === 'check_all' ? T('plugin_checking') : T('plugin_updating'));
+    setManageBusy(true);
+    try {
+      const result = await api(endpoint, { method: 'POST', body: JSON.stringify({}) });
+      if (action === 'check_all') {
+        if (result.failed) {
+          showToast(T('plugin_check_failed_hint'), { type: 'error' });
+        } else {
+          applyPluginCheckResult(result);
+          showPluginCheckToast(result);
+        }
+      } else if (result.failed) {
+        showToast(T('plugin_update_all_failed'), { type: 'error' });
+      } else if (!result.completed) {
+        showToast(T('plugin_update_timeout'), { type: 'error' });
+      } else if (result.skipped) {
+        showToast(T('plugin_update_all_none'));
+      } else if (result.success) {
+        state.pluginUpdates = {};
+        refreshPlugins();
+        showToast(T('plugin_update_all_done'));
+      } else {
+        showToast(T('plugin_update_all_unconfirmed'), { type: 'error' });
+      }
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('toast_failed', { label: T(action === 'check_all' ? 'plugin_check_update' : 'plugin_update'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'check_update') {
+    showToast(T('plugin_checking'));
+    setManageBusy(true);
+    try {
+      const result = await api('/api/plugins/check_update', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
+      if (result.failed) {
+        showToast(T('plugin_check_failed_hint'), { type: 'error' });
+      } else {
+        applyPluginCheckResult(result);
+        showPluginCheckToast(result);
+      }
+    } catch (error) {
+      showToast(T('toast_failed', { label: T('plugin_check_update'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'configs') {
+    openConfigModal('plugin', pluginId);
+    return;
+  }
+
+  if (action === 'update') {
+    const confirmed = await confirmDialog(T('plugin_update_confirm', { name }), {
+      title: T('plugin_update'),
+      confirmText: T('plugin_update'),
+    });
+    if (!confirmed) return;
+    showToast(T('plugin_updating'));
+    setManageBusy(true);
+    try {
+      const result = await api('/api/plugins/update', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
+      if (result.failed) {
+        // keep the update marker so the user can retry
+        showToast(T('plugin_update_failed', { name }), { type: 'error' });
+      } else if (!result.completed) {
+        showToast(T('plugin_update_timeout'), { type: 'error' });
+      } else if (result.noop) {
+        delete state.pluginUpdates[pluginId];
+        showToast(T('plugin_update_none', { name }));
+      } else if (result.success) {
+        delete state.pluginUpdates[pluginId];
+        showToast(T('plugin_update_done', { name }));
+      } else {
+        showToast(T('plugin_update_unconfirmed', { name }), { type: 'error' });
+      }
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('toast_failed', { label: T('plugin_update'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'reload') {
+    const isSelf = button.dataset.self === '1';
+    const confirmed = await confirmDialog(
+      isSelf ? T('reload_plugin_self_confirm') : T('reload_plugin_confirm', { id: pluginId }),
+      { title: T('reload_plugin_title'), confirmText: T('reload') }
+    );
+    if (!confirmed) return;
+    setManageBusy(true);
+    try {
+      const result = await api('/api/plugins/reload', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
+      showToast(result.accepted ? T('plugin_reloaded', { id: pluginId }) : T('plugin_reload_noop', { id: pluginId }), { type: result.accepted ? 'info' : 'error' });
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('reload_failed', { error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'load') {
+    showToast(T('plugin_loading'));
+    setManageBusy(true);
+    try {
+      const result = await api('/api/plugins/load', { method: 'POST', body: JSON.stringify({ file_name: fileName }) });
+      showToast(result.accepted ? T('plugin_loaded_done', { name }) : T('plugin_load_noop', { name }), { type: result.accepted ? 'info' : 'error' });
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('toast_failed', { label: T('plugin_load'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'disable') {
+    const confirmed = await confirmDialog(T('plugin_disable_confirm', { name }), {
+      title: T('plugin_disable'),
+      confirmText: T('plugin_disable'),
+    });
+    if (!confirmed) return;
+    setManageBusy(true);
+    try {
+      await api('/api/plugins/disable', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
+      showToast(T('plugin_disabled_done', { name }));
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('toast_failed', { label: T('plugin_disable'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'enable') {
+    setManageBusy(true);
+    try {
+      await api('/api/plugins/enable', { method: 'POST', body: JSON.stringify({ file_name: fileName }) });
+      showToast(T('plugin_enabled_done', { name }));
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('toast_failed', { label: T('plugin_enable'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+    return;
+  }
+
+  if (action === 'delete') {
+    const confirmed = await confirmDialog(T('plugin_delete_confirm', { name }), {
+      title: T('plugin_delete'),
+      confirmText: T('plugin_delete'),
+    });
+    if (!confirmed) return;
+    const body = pluginId ? { plugin_id: pluginId } : { file_name: fileName };
+    setManageBusy(true);
+    try {
+      await api('/api/plugins/delete', { method: 'POST', body: JSON.stringify(body) });
+      showToast(T('plugin_deleted_done', { name }));
+      refreshPlugins();
+    } catch (error) {
+      showToast(T('toast_failed', { label: T('plugin_delete'), error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+  }
+});
+
+/* ---------- mod management actions ---------- */
+const MOD_ACTION_CONFIRMS = {
+  disable: { title: 'mod_disable_title', message: 'mod_disable_confirm', verb: 'mod_disable' },
+  enable: { title: 'mod_enable_title', message: 'mod_enable_confirm', verb: 'mod_enable' },
+  delete: { title: 'mod_delete_title', message: 'mod_delete_confirm', verb: 'mod_delete' },
+};
+const MOD_ACTION_DONE = { disable: 'mod_disabled_done', enable: 'mod_enabled_done', delete: 'mod_deleted_done' };
+
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('[data-mod-action]');
+  if (!button) return;
+  const action = button.dataset.modAction;
+  const file = button.dataset.modFile;
+  if (action === 'configs') {
+    // Mod config file names often don't contain the mod id/name (e.g. mod.toml),
+    // so prefill the filter with the mod id/name and let the user narrow down
+    // instead of dumping the whole config/ tree.
+    openConfigModal('mod', button.dataset.modHint || '');
+    return;
+  }
+  const confirm = MOD_ACTION_CONFIRMS[action];
+  if (!confirm) return;
+  const confirmed = await confirmDialog(
+    T(confirm.message, { name: file }),
+    { title: T(confirm.title), confirmText: T(confirm.verb) }
+  );
+  if (!confirmed) return;
+  setManageBusy(true);
+  try {
+    if (action === 'disable') await api(`/api/mods/${encodeURIComponent(file)}/disable`, { method: 'POST' });
+    else if (action === 'enable') await api(`/api/mods/${encodeURIComponent(file)}/enable`, { method: 'POST' });
+    else if (action === 'delete') await api(`/api/mods/${encodeURIComponent(file)}`, { method: 'DELETE' });
+    showToast(T(MOD_ACTION_DONE[action], { name: file }));
+    refreshMods();
+  } catch (error) {
+    showToast(T('toast_failed', { label: T(confirm.verb), error: error.message }), { type: 'error' });
+  } finally {
+    setManageBusy(false);
+  }
+});
+
+if ($('mod-upload')) {
+  $('mod-upload').addEventListener('click', () => $('mod-file-input').click());
+  $('mod-file-input').addEventListener('change', async () => {
+    const fileInput = $('mod-file-input');
+    const file = fileInput.files && fileInput.files[0];
+    fileInput.value = '';
+    if (!file) return;
+    let overwrite = false;
+    if (state.mods.some((mod) => mod.file === file.name)) {
+      overwrite = await confirmDialog(
+        T('mod_replace_confirm', { name: file.name }),
+        { title: T('mod_replace_title'), confirmText: T('mod_replace') }
+      );
+      if (!overwrite) return;
+    }
+    const form = new FormData();
+    form.append('file', file);
+    setManageBusy(true);
+    try {
+      const result = await api(`/api/mods/upload?overwrite=${overwrite ? 1 : 0}`, { method: 'POST', body: form });
+      showToast(T('mod_uploaded', { name: result.file }));
+      refreshMods();
+    } catch (error) {
+      showToast(T('mod_upload_failed', { error: error.message }), { type: 'error' });
+    } finally {
+      setManageBusy(false);
+    }
+  });
+}
+
+document.querySelectorAll('#manage-subtabs button').forEach((button) => {
+  button.addEventListener('click', () => setManageSubtab(button.dataset.manageSubtab));
+});
+
+if ($('config-modal')) {
+  $('config-modal').addEventListener('mousedown', (event) => {
+    if (event.target === $('config-modal')) closeConfigModal();
+  });
+  $('config-modal-close').addEventListener('click', closeConfigModal);
+  $('config-modal-files').addEventListener('click', (event) => {
+    const item = event.target.closest('[data-config-index]');
+    if (!item) return;
+    const file = configModalFiles()[Number(item.dataset.configIndex)];
+    if (file) openConfigFile(file);
+  });
+  $('config-modal-filter').addEventListener('input', renderConfigModalList);
+  $('config-modal-editor').addEventListener('input', () => {
+    state.configModal.dirty = true;
+    updateConfigModalSaveButton();
+  });
+  $('config-modal-save').addEventListener('click', saveConfigModalFile);
+  document.addEventListener('keydown', (event) => {
+    const modal = $('config-modal');
+    if (event.key === 'Escape' && modal && !modal.hidden) closeConfigModal();
+  });
+}
 
 /* ---------- player management sub-tabs ---------- */
 document.querySelectorAll('#player-subtabs button').forEach((button) => button.addEventListener('click', () => {
@@ -807,7 +1517,8 @@ function switchView(view) {
   document.querySelectorAll('.nav-item').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
   document.querySelectorAll('.view').forEach((panel) => panel.classList.toggle('active', panel.dataset.viewPanel === view));
   if (view === 'players') refreshRoster();
-  if (view === 'world') { refreshProperties(); refreshMods(); }
+  if (view === 'manage') setManageSubtab(state.manageSubtab);
+  if (view === 'world') { refreshProperties(); refreshPlugins(); refreshMods(); }
   // charts can only measure themselves once their panel is visible
   if (view === 'performance') refreshCharts();
 }
@@ -845,6 +1556,7 @@ function connectSocket() {
     if (event.type === 'player' || event.type === 'status') {
       refreshOverview();
       if (state.activeView === 'players') refreshRoster();
+      if (state.activeView === 'manage') { refreshPlugins(); refreshMods(); }
     }
   };
 }
@@ -947,6 +1659,7 @@ document.querySelectorAll('[data-action]').forEach((button) => button.addEventLi
 }));
 
 $('view-title').textContent = viewTitle('console');
+if ($('config-modal-editor-name')) $('config-modal-editor-name').textContent = T('mod_config_editor_title');
 refreshConnectionText();
 refreshOverview();
 refreshWorld();
@@ -955,6 +1668,12 @@ setInterval(() => {
   refreshOverview();
   refreshWorld(); // seed / level name live in the always-visible overview strip
   if (state.activeView === 'players') refreshRoster();
+  if (state.activeView === 'manage') {
+    refreshPlugins();
+    refreshMods();
+  }
+  const configModal = $('config-modal');
+  if (configModal && !configModal.hidden) refreshConfigModalFiles();
 }, 10000);
 // Charts poll once a second, but only while their view is on screen. This endpoint
 // reads the in-memory ring buffer, so it never touches RCON or MCDR's TaskExecutor.
@@ -969,6 +1688,25 @@ document.addEventListener('mwm:langchange', () => {
   refreshOverview();
   refreshWorld();
   if (state.activeView === 'players') refreshRoster();
+  if (state.activeView === 'manage') {
+    refreshPlugins();
+    refreshMods();
+  }
+  const configModal = $('config-modal');
+  if (configModal && !configModal.hidden) {
+    $('config-modal-title').textContent = T(state.configModal.type === 'plugin' ? 'config_modal_plugin_title' : 'config_modal_mod_title');
+    renderConfigModalList();
+    const current = state.configModal.current;
+    if (current) {
+      $('config-modal-editor-name').textContent = current.path.split('/').pop() || current.path;
+      $('config-modal-path').textContent = state.configModal.type === 'plugin' ? `${current.plugin_id}/${current.path}` : current.path;
+      $('config-modal-note').textContent = current.editable
+        ? T(state.configModal.type === 'plugin' ? 'plugin_config_note' : 'mod_config_note', { size: formatBytes(current.size) })
+        : current.reason === 'too_large'
+          ? T('mod_config_too_large', { size: formatBytes(current.size) })
+          : T('mod_config_binary');
+    }
+  }
   if (state.activeView === 'world') { refreshProperties(); refreshMods(); }
   if (state.activeView === 'performance') refreshCharts();
 });
