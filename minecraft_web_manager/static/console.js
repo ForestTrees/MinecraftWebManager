@@ -731,6 +731,11 @@ async function refreshProperties() {
     propertiesState.dirty.clear();
     $('properties-save').disabled = true;
     $('properties-save').textContent = T('save_changes');
+    const pathEl = $('properties-path');
+    if (pathEl) {
+      pathEl.textContent = (data.path || '').split(/[\\/]/).pop() || 'server.properties';
+      pathEl.title = data.path || 'server.properties';
+    }
     renderProperties();
   } catch (error) {
     $('properties-list').innerHTML = `<p class="hint">${escapeHtml(T('load_failed', { error: error.message }))}</p>`;
@@ -1840,7 +1845,7 @@ function switchView(view) {
   document.querySelectorAll('.view').forEach((panel) => panel.classList.toggle('active', panel.dataset.viewPanel === view));
   if (view === 'players') refreshRoster();
   if (view === 'manage') setManageSubtab(state.manageSubtab);
-  if (view === 'world') { setWorldSubtab(state.worldSubtab); refreshPlugins(); refreshMods(); }
+  if (view === 'world') setWorldSubtab(state.worldSubtab);
   // charts can only measure themselves once their panel is visible
   if (view === 'performance') refreshCharts();
 }
@@ -2031,7 +2036,6 @@ document.addEventListener('mwm:langchange', () => {
   }
   if (state.activeView === 'world') {
     setWorldSubtab(state.worldSubtab);
-    refreshMods();
     if (mcdrConfigState.loaded) {
       const pathEl = $('mcdr-config-path');
       if (pathEl) pathEl.textContent = mcdrConfigState.path;

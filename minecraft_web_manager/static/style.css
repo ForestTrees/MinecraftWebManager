@@ -383,10 +383,6 @@ input.field:focus, select.field:focus {
 .section-title { font-size: .85rem; font-weight: 700; color: var(--text-muted); margin: 1.2rem 0 .6rem; }
 .subview .section-title:first-child { margin-top: 0; }
 
-.world-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 1.4rem; align-items: start; }
-.world-side { display: grid; gap: 1.4rem; align-content: start; position: sticky; top: 1.2rem; }
-.world-side .plugins { max-height: min(38vh, 320px); }
-.world-side .plugins li { padding: .5rem .2rem; }
 .scroll-area { max-height: 360px; overflow: auto; }
 .world-panel-head { flex-wrap: nowrap; }
 .world-panel-head h2 { line-height: 1; white-space: nowrap; }
@@ -458,8 +454,6 @@ input.field:focus, select.field:focus {
 .switch input { width: 1rem; height: 1rem; accent-color: var(--accent); }
 
 @media (max-width: 960px) {
-  .world-layout { grid-template-columns: 1fr; }
-  .world-side { position: static; }
   .mod-config-layout { grid-template-columns: 1fr; }
   .config-editor { min-height: 360px; }
   .properties-grid { max-height: 60vh; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }

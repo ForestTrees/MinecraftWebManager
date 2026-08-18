@@ -53,17 +53,14 @@ Plugins and mods share one tab, switched with two in-page sub-tabs: Plugins / Mo
 
 - **Mod files**: upload `.jar` files into the server's `mods/` folder (an existing file name asks for confirmation before overwriting); enable / disable by renaming `foo.jar` ↔ `foo.jar.disabled`; deleting permanently removes the file. Uploads, enable/disable and deletes only take effect after a **server restart**
 - **Config files**: browse every file under the server's `config/` directory in a modal, open one and edit it, then save. The original encoding (UTF-8 / Latin-1), BOM and line endings are preserved. Binary files and files over 1 MiB are read-only, and `.DS_Store` files are filtered out. Clicking "Config" on a mod pre-fills the filter with that mod's id / name so its own files come up first instead of the whole directory
-- The World sidebar keeps a quick "Loaded mods" list; the Plugins & Mods page is the full management surface
+### Server Settings
 
-### World
+The top of the Server Settings page switches between two sub-tabs: **Server settings** and **MCDR config**.
 
-The top of the World page switches between two sub-tabs: **Server settings** and **MCDR config**.
-
-- **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
+- **Server settings**: view and edit `server.properties` in the browser; the current file is shown next to the title in a monospace label. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
 - **MCDR config**: on plugin load the panel inspects the running MCDR version's `config.yml` and renders visual cards grouped into Basic / Server / Plugin / Misc / Advanced / Debug, with dedicated controls for booleans, numbers and enums. Start command, RCON address, working directory, encoding, decoding and plugin directories use single-line inputs; list-typed fields (such as plugin directories or command arrays) are comma-separated in the input. Only keys that actually exist in the current MCDR version are shown, so the schema stays compatible across MCDR releases; unknown keys added by newer versions appear as generic inputs. The RCON password is never echoed and an empty submission keeps it unchanged. Saving automatically runs `!!MCDR reload config` so changes take effect immediately
-- **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder, and disabled files are marked as such. Full management lives in the "Plugins & Mods" page
 
-![World](docs/img/world.png)
+![Server settings](docs/img/world.png)
 
 ### Server status
 
@@ -157,7 +154,7 @@ Enabling it requires configuring **both sides** with a matching port and passwor
 - Minecraft side: `enable-rcon`, `rcon.port` and `rcon.password` in `server/server.properties`
 - MCDR side: the `rcon` section of MCDR's `config.yml`
 
-The three Minecraft-side settings can be edited right from the dashboard under **World → 服务器配置** (server settings); the server must be restarted afterwards. The MCDR side can be edited under **World → MCDR config**; saving automatically runs `!!MCDR reload config`.
+The three Minecraft-side settings can be edited right from the dashboard under **Server Settings → Server settings**; the server must be restarted afterwards. The MCDR side can be edited under **Server Settings → MCDR config**; saving automatically runs `!!MCDR reload config`.
 
 ---
 
