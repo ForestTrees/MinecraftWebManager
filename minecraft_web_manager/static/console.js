@@ -141,6 +141,11 @@ function formatDateTime(epochSeconds) {
   return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 function escapeHtml(text) { const node = document.createElement('span'); node.textContent = String(text); return node.innerHTML; }
+function localizedDescription(item) {
+  const lang = MWMI18N.getLang();
+  if (lang === 'zh') return item.description_zh || item.description_en || item.description || '';
+  return item.description_en || item.description || '';
+}
 
 /* ---------- Minecraft § color/format codes ---------- */
 const MC_COLORS = {
@@ -1137,15 +1142,16 @@ function renderPlugins(plugins) {
   if (!body) return;
   body.innerHTML = plugins.map((plugin) => {
     const updateInfo = state.pluginUpdates[plugin.id];
+    const description = localizedDescription(plugin);
     const metaTitle = [
       updateInfo ? `v${updateInfo.current} → v${updateInfo.latest}` : (plugin.version ? `v${plugin.version}` : ''),
       state.pluginChecked.has(plugin.id) && !updateInfo ? T('plugin_up_to_date') : '',
-      plugin.description || '',
+      description || '',
     ].filter(Boolean).join(' · ');
     const metaHtml = plugin.version || updateInfo ? `
       <div class="p-meta" title="${escapeHtml(metaTitle)}">${updateInfo
         ? `<span class="plugin-update">v${escapeHtml(updateInfo.current)} → v${escapeHtml(updateInfo.latest)}</span>`
-        : `v${escapeHtml(plugin.version)}`}${state.pluginChecked.has(plugin.id) && !updateInfo ? ` <span class="plugin-up-to-date">${escapeHtml(T('plugin_up_to_date'))}</span>` : ''}${plugin.description ? ' · ' + escapeHtml(plugin.description) : ''}</div>` : '';
+        : `v${escapeHtml(plugin.version)}`}${state.pluginChecked.has(plugin.id) && !updateInfo ? ` <span class="plugin-up-to-date">${escapeHtml(T('plugin_up_to_date'))}</span>` : ''}${description ? ' · ' + escapeHtml(description) : ''}</div>` : '';
     return `
     <tr>
       <td>
@@ -1396,6 +1402,7 @@ function renderModsList(mods) {
   const body = $('mods-table-body');
   if (!body) return;
   body.innerHTML = mods.map((m) => {
+    const description = localizedDescription(m);
     const status = m.disabled
       ? `<span class="tag muted">${escapeHtml(T('mod_disabled'))}</span>`
       : `<span class="tag">${escapeHtml(T('mod_enabled'))}</span>`;
@@ -1403,12 +1410,12 @@ function renderModsList(mods) {
       <button class="link-btn" data-mod-action="${m.disabled ? 'enable' : 'disable'}" data-mod-file="${escapeHtml(m.file)}" type="button">${escapeHtml(T(m.disabled ? 'mod_enable' : 'mod_disable'))}</button>
       <button class="link-btn" data-mod-action="configs" data-mod-file="${escapeHtml(m.file)}" data-mod-hint="${escapeHtml(m.id || m.name || m.file.replace(/\.jar(?:\.disabled)?$/i, ''))}" type="button">${escapeHtml(T('mod_config'))}</button>
       <button class="link-btn danger" data-mod-action="delete" data-mod-file="${escapeHtml(m.file)}" type="button">${escapeHtml(T('mod_delete'))}</button>`;
-    const metaTitle = [m.version ? `v${m.version}` : '', m.description || ''].filter(Boolean).join(' · ');
+    const metaTitle = [m.version ? `v${m.version}` : '', description || ''].filter(Boolean).join(' · ');
     return `
       <tr>
         <td>
           <div class="p-name" title="${escapeHtml(m.name || m.file)}">${escapeHtml(m.name || m.file)}</div>
-          ${m.version || m.description ? `<div class="p-meta" title="${escapeHtml(metaTitle)}">${m.version ? `<span>v${escapeHtml(m.version)}</span>` : ''}${m.description ? ' · ' + escapeHtml(m.description) : ''}</div>` : ''}
+          ${m.version || description ? `<div class="p-meta" title="${escapeHtml(metaTitle)}">${m.version ? `<span>v${escapeHtml(m.version)}</span>` : ''}${description ? ' · ' + escapeHtml(description) : ''}</div>` : ''}
         </td>
         <td class="mono" title="${escapeHtml(m.file)}">${escapeHtml(m.file)}</td>
         <td>${status}</td>

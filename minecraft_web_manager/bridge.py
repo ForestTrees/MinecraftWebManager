@@ -545,7 +545,9 @@ class MCDRBridge:
                         "id": plugin_id,
                         "name": self._string_or_none(getattr(item, "name", plugin_id)),
                         "version": self._string_or_none(getattr(item, "version", None)),
-                        "description": self._string_or_none(getattr(item, "description", None)),
+                        "description": None,
+                        "description_zh": None,
+                        "description_en": None,
                         "self": plugin_id == self_plugin_id,
                         "state": "loaded",
                         "disabled": False,
@@ -558,6 +560,10 @@ class MCDRBridge:
                         "file_path": file_path,
                     }
                 )
+                description_zh, description_en = self._description_fields(getattr(item, "description", None))
+                entries[-1]["description"] = description_en
+                entries[-1]["description_zh"] = description_zh
+                entries[-1]["description_en"] = description_en
 
             for file_path in self.server.get_disabled_plugin_list():
                 file_name = Path(file_path).name
@@ -960,6 +966,8 @@ class MCDRBridge:
                 "name": None,
                 "version": None,
                 "description": None,
+                "description_zh": None,
+                "description_en": None,
                 "disabled": jar.name.endswith(".jar.disabled"),
                 "size": stat.st_size if stat is not None else None,
                 "mtime": stat.st_mtime if stat is not None else None,
@@ -967,12 +975,15 @@ class MCDRBridge:
             try:
                 with zipfile.ZipFile(jar) as archive:
                     metadata = json.loads(archive.read("fabric.mod.json").decode("utf-8", errors="replace"))
+                description_zh, description_en = self._description_fields(metadata.get("description"))
                 entry.update(
                     {
                         "id": self._string_or_none(metadata.get("id")),
                         "name": self._string_or_none(metadata.get("name")),
                         "version": self._string_or_none(metadata.get("version")),
-                        "description": self._string_or_none(metadata.get("description")),
+                        "description": description_en,
+                        "description_zh": description_zh,
+                        "description_en": description_en,
                     }
                 )
             except (OSError, KeyError, ValueError, zipfile.BadZipFile):
@@ -1855,3 +1866,28 @@ class MCDRBridge:
     @staticmethod
     def _string_or_none(value: Any) -> str | None:
         return None if value is None else str(value)
+
+    @staticmethod
+    def _description_fields(value: Any) -> tuple[str | None, str | None]:
+        """Resolve a plugin/mod description that may be a multilingual dict.
+
+        MCDR metadata allows ``description`` to be either a plain string or a
+        ``{language: text}`` mapping (e.g. ``en_us`` / ``zh_cn``). Return the best
+        Chinese and English variants so the frontend can follow the panel language,
+        with English as the final fallback when no Chinese key exists.
+        """
+
+        def pick(preferred: tuple[str, ...]) -> str | None:
+            if isinstance(value, str):
+                return value
+            if isinstance(value, dict):
+                for language in preferred:
+                    text = value.get(language)
+                    if isinstance(text, str):
+                        return text
+                for text in value.values():
+                    if isinstance(text, str):
+                        return text
+            return None
+
+        return pick(("zh_cn", "zh_tw", "zh", "en_us", "en")), pick(("en_us", "en", "zh_cn", "zh_tw", "zh"))
