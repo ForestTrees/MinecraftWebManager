@@ -2,13 +2,13 @@
 
 **English** | [中文](README.md)
 
-An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serves a password-protected web dashboard for your Minecraft server: a live console, player management, online plugin and mod management, an online `server.properties` editor, mod-config editing and resource usage charts.
+An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serves a password-protected web dashboard for your Minecraft server: a live console, player management, online plugin and mod management, online editors for `server.properties` and MCDR's `config.yml`, mod-config editing and resource usage charts.
 
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
-- **Version**: 1.1.0
+- **Version**: 1.2.0
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
-- **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`
+- **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`, `ruamel-yaml`
 
 ---
 
@@ -57,7 +57,10 @@ Plugins and mods share one tab, switched with two in-page sub-tabs: Plugins / Mo
 
 ### World
 
+The top of the World page switches between two sub-tabs: **Server settings** and **MCDR config**.
+
 - **Server settings**: view and edit `server.properties` in the browser. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
+- **MCDR config**: on plugin load the panel inspects the running MCDR version's `config.yml` and renders visual cards grouped into Basic / Server / Plugin / Misc / Advanced / Debug, with dedicated controls for booleans, numbers and enums. Start command, RCON address, working directory, encoding, decoding and plugin directories use single-line inputs; list-typed fields (such as plugin directories or command arrays) are comma-separated in the input. Only keys that actually exist in the current MCDR version are shown, so the schema stays compatible across MCDR releases; unknown keys added by newer versions appear as generic inputs. The RCON password is never echoed and an empty submission keeps it unchanged. Saving automatically runs `!!MCDR reload config` so changes take effect immediately
 - **Loaded plugins / Loaded mods**: live in an always-visible right sidebar (no scrolling to the bottom). Plugins can be reloaded individually; mods are read from `fabric.mod.json` in the server's `mods/` folder, and disabled files are marked as such. Full management lives in the "Plugins & Mods" page
 
 ![World](docs/img/world.png)
@@ -154,7 +157,7 @@ Enabling it requires configuring **both sides** with a matching port and passwor
 - Minecraft side: `enable-rcon`, `rcon.port` and `rcon.password` in `server/server.properties`
 - MCDR side: the `rcon` section of MCDR's `config.yml`
 
-The three Minecraft-side settings can be edited right from the dashboard under **World → 服务器配置** (server settings); the server must be restarted afterwards.
+The three Minecraft-side settings can be edited right from the dashboard under **World → 服务器配置** (server settings); the server must be restarted afterwards. The MCDR side can be edited under **World → MCDR config**; saving automatically runs `!!MCDR reload config`.
 
 ---
 
@@ -177,6 +180,7 @@ The dashboard has full control over your server — arbitrary commands, bans, co
   ```
 
 - Sensitive settings such as `rcon.password` are shown blank and never sent to the browser; submitting an empty value leaves them unchanged
+- The MCDR config editor renders fields individually and never echoes the RCON password; submitting an empty password field keeps the current value
 
 ---
 
@@ -186,6 +190,7 @@ The dashboard has full control over your server — arbitrary commands, bans, co
 - **World seed, name and difficulty are read from save files**, which only update when the server writes them to disk — they can lag reality by minutes
 - **Player IPs and UUIDs are parsed from server output**, so unusual log formats may prevent capture. Players recovered after a plugin reload have no join time or IP
 - **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only. Upload, enable/disable and delete operate on `.jar` files and do not depend on the loader
+- **MCDR config is edited as visual fields** and rewritten by ruamel.yaml on save; the field set is detected from the running MCDR version, and unknown keys from newer versions appear as generic inputs
 - **Plugin check updates / updates require network access to the MCDR plugin catalogue**, and only packed plugins (`.mcdr` / `.pyz`) can be updated; detailed output appears in the live console. The panel itself cannot be updated from the panel; run `!!MCDR plugin install -U -y minecraft_web_manager` and then `!!MCDR reload plugin minecraft_web_manager` in the MCDR console. The panel itself CAN be reloaded from the panel — it briefly goes offline and comes back automatically
 - **Bot detection**: classic Carpet bots are matched by their offline UUID. TIS/AMS/RMS-style extensions may give bots Mojang-resolved or random v4 UUIDs, which only name rules + usercache signals can catch. Name rules only apply to players with no usercache record; use `not_bot_names` or the per-row "unmark" action to force a real-player classification
 - **Ping is unavailable on vanilla servers** and therefore not shown

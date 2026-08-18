@@ -143,6 +143,10 @@ class ModConfigUpdateRequest(BaseModel):
     content: str = Field(max_length=1_000_000)
 
 
+class McdrConfigUpdateRequest(BaseModel):
+    changes: dict[str, Any] = Field(default_factory=dict)
+
+
 class EventHub:
     """Fan-out events from MCDR's thread to authenticated WebSocket clients."""
 
@@ -267,7 +271,7 @@ class WebService:
     def _build_app(self) -> FastAPI:
         # Interactive API docs are disabled: they were publicly reachable without
         # authentication and reveal the whole command surface of the panel.
-        app = FastAPI(title="Minecraft Web Manager", version="1.1.0", docs_url=None, openapi_url=None, redoc_url=None)
+        app = FastAPI(title="Minecraft Web Manager", version="1.2.0", docs_url=None, openapi_url=None, redoc_url=None)
 
         @app.middleware("http")
         async def renew_session(request: Request, call_next):
@@ -695,6 +699,28 @@ class WebService:
             except Exception as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
             self.publish("status", {"event": "mod_config_saved", "path": rel_path, "by": user["sub"]})
+            return result
+
+        @app.get("/api/mcdr/config")
+        async def mcdr_config(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                return await asyncio.to_thread(self.bridge.mcdr_config)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.put("/api/mcdr/config")
+        async def update_mcdr_config(
+            body: McdrConfigUpdateRequest, user: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(self.bridge.update_mcdr_config, body.changes)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "mcdr_config_saved", "path": "config.yml", "by": user["sub"]})
             return result
 
         @app.get("/api/server/properties")

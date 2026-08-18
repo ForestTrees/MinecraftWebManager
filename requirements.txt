@@ -4,3 +4,7 @@ uvicorn[standard]>=0.30,<1.0
 # multipart parsing for mod uploads (/api/mods/upload)
 python-multipart>=0.0.9,<1.0
 psutil>=6.0,<8.0
+# parsed / rewritten with comment preservation for MCDR config.yml
+# note: use the normalized distribution name (ruamel-yaml), MCDR's requirement
+# checker resolves it via importlib.metadata and would miss "ruamel.yaml"
+ruamel-yaml>=0.17,<0.19

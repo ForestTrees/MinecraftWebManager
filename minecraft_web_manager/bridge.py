@@ -12,6 +12,7 @@ import threading
 import time
 import uuid
 import zipfile
+from io import StringIO
 from pathlib import Path
 from typing import Any, Callable
 
@@ -19,6 +20,7 @@ import psutil
 from mcdreforged.command.command_source import PluginCommandSource
 from mcdreforged.constants import core_constant
 from mcdreforged.minecraft.rtext.text import RTextBase
+from ruamel.yaml import YAML
 
 from . import nbt, pending, properties, roster
 
@@ -31,6 +33,7 @@ _PLUGIN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 # are plain text and should stay small enough to edit in a browser textarea.
 _MAX_MOD_CONFIG_BYTES = 1 * 1024 * 1024
 _MAX_MOD_CONFIG_CHARS = 1_000_000
+_PLUGIN_INTERNAL_CONFIG_FILES = {"pending_properties.json"}
 # Give big plugin downloads time to finish; the frontend reports an honest timeout
 # when the PIM operation is still running after this many seconds.
 _CHECK_UPDATE_TIMEOUT = 120.0
@@ -71,6 +74,60 @@ _SENSITIVE_PROPERTY_KEYS = {
     "management-server-secret",
     "management-server-tls-keystore-password",
 }
+
+# Field metadata for MCDR's config.yml. It intentionally covers several MCDR
+# versions: only keys actually present in the running MCDR's config are sent to the
+# browser, so older/newer keys degrade to a plain text input instead of disappearing.
+_MCDR_CONFIG_META: dict[str, dict[str, Any]] = {
+    "language": {"category": "basic", "type": "str", "options": ["en_us", "zh_cn", "zh_tw"]},
+    "working_directory": {"category": "server", "type": "str", "input": True},
+    "start_command": {"category": "server", "input": True},
+    "handler": {
+        "category": "server",
+        "type": "str",
+        "options": [
+            "vanilla_handler",
+            "beta18_handler",
+            "bukkit_handler",
+            "bukkit14_handler",
+            "forge_handler",
+            "cat_server_handler",
+            "arclight_handler",
+            "bungeecord_handler",
+            "waterfall_handler",
+            "velocity_handler",
+        ],
+    },
+    "encoding": {"category": "server", "type": "str", "nullable": True, "input": True},
+    "decoding": {"category": "server", "nullable": True, "input": True},
+    "rcon": {"category": "server"},
+    "rcon.enable": {"category": "server", "type": "bool"},
+    "rcon.address": {"category": "server", "type": "str", "nullable": True, "input": True},
+    "rcon.port": {"category": "server", "type": "int", "nullable": True},
+    "rcon.password": {"category": "server", "type": "str", "nullable": True, "sensitive": True},
+    "plugin_directories": {"category": "plugin", "type": "list", "input": True},
+    "catalogue_meta_cache_ttl": {"category": "plugin", "type": "int"},
+    "catalogue_meta_fetch_timeout": {"category": "plugin", "type": "float"},
+    "catalogue_meta_url": {"category": "plugin", "type": "str", "nullable": True},
+    "plugin_download_url": {"category": "plugin", "type": "str", "nullable": True},
+    "plugin_download_timeout": {"category": "plugin", "type": "float"},
+    "plugin_pip_install_extra_args": {"category": "plugin", "type": "str", "nullable": True},
+    "check_update": {"category": "misc", "type": "bool"},
+    "advanced_console": {"category": "misc", "type": "bool"},
+    "http_proxy": {"category": "misc", "type": "str", "nullable": True},
+    "https_proxy": {"category": "misc", "type": "str", "nullable": True},
+    "telemetry": {"category": "misc", "type": "bool"},
+    "disable_console_thread": {"category": "advanced", "type": "bool"},
+    "disable_console_color": {"category": "advanced", "type": "bool"},
+    "custom_handlers": {"category": "advanced", "type": "list", "nullable": True},
+    "custom_info_reactors": {"category": "advanced", "type": "list", "nullable": True},
+    "watchdog_threshold": {"category": "advanced", "type": "int"},
+    "handler_detection": {"category": "advanced", "type": "bool"},
+    "debug": {"category": "debug"},
+    "write_server_output_to_log_file": {"category": "debug", "type": "bool"},
+}
+_MCDR_CONFIG_CATEGORY_ORDER = ["basic", "server", "plugin", "misc", "advanced", "debug", "other"]
+_MISSING = object()
 
 # action -> (target kind, command template)
 _PLAYER_ACTIONS: dict[str, tuple[str, str]] = {
@@ -137,6 +194,8 @@ class MCDRBridge:
         self._tick_lock = threading.Lock()
         self._world_cache: tuple[tuple[tuple[str, int], ...], dict[str, Any]] | None = None
         self._world_lock = threading.Lock()
+        self._mcdr_config_cache: tuple[tuple[tuple[str, int], str], dict[str, Any]] | None = None
+        self._mcdr_config_lock = threading.Lock()
         self.pending: pending.PendingProperties | None = None
         self._instant_keys: set[str] = set()
         self._instant_lock = threading.Lock()
@@ -1053,6 +1112,8 @@ class MCDRBridge:
         self._validate_plugin_id(plugin_id)
         if plugin_id in (".", "..") or "/" in plugin_id or "\\" in plugin_id:
             raise ValueError("Invalid plugin id")
+        if any(part in _PLUGIN_INTERNAL_CONFIG_FILES for part in Path(relative).parts):
+            raise ValueError("Internal plugin state files are not editable")
         return self._resolve_text_path(Path("config") / plugin_id, relative)
 
     def mod_configs(self) -> dict[str, Any]:
@@ -1204,7 +1265,7 @@ class MCDRBridge:
                     )
                     for filename in sorted(filenames):
                         path = Path(dirpath) / filename
-                        if filename == ".DS_Store" or path.is_symlink():
+                        if filename == ".DS_Store" or filename in _PLUGIN_INTERNAL_CONFIG_FILES or path.is_symlink():
                             continue
                         try:
                             stat = path.stat()
@@ -1231,6 +1292,260 @@ class MCDRBridge:
         return self._write_text_config(
             self._resolve_plugin_config_path(plugin_id, relative), relative, content
         )
+
+    # ---------- MCDR config ----------
+
+    @staticmethod
+    def _mcdr_config_path() -> Path:
+        """Resolve MCDR's own config.yml inside MCDR's working directory."""
+        return MCDRBridge._resolve_text_path(Path("."), core_constant.CONFIG_FILE_PATH)
+
+    @staticmethod
+    def _plain_yaml(value: Any) -> Any:
+        """Turn ruamel's comment-preserving containers into plain Python values."""
+        if isinstance(value, bool) or type(value).__name__ == "ScalarBoolean":
+            return bool(value)
+        if isinstance(value, dict):
+            return {key: MCDRBridge._plain_yaml(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [MCDRBridge._plain_yaml(item) for item in value]
+        if isinstance(value, int):
+            return int(value)
+        if isinstance(value, float):
+            return float(value)
+        if isinstance(value, str):
+            return str(value)
+        return value
+
+    @staticmethod
+    def _merge_mcdr_defaults(defaults: dict[str, Any], file_data: dict[str, Any]) -> dict[str, Any]:
+        """Merge file values over the running MCDR's effective defaults.
+
+        Keys missing from config.yml (MCDR fills them with defaults) still appear in
+        the visual editor, and keys that only exist in this MCDR version stay visible.
+        """
+        if not isinstance(file_data, dict):
+            file_data = {}
+        result: dict[str, Any] = {}
+        for key, default_value in defaults.items():
+            file_value = file_data.get(key, _MISSING)
+            if isinstance(default_value, dict):
+                result[key] = MCDRBridge._merge_mcdr_defaults(
+                    default_value, file_value if isinstance(file_value, dict) else {}
+                )
+            else:
+                result[key] = file_value if file_value is not _MISSING else default_value
+        for key, file_value in file_data.items():
+            if key not in result:
+                result[key] = file_value
+        return result
+
+    @staticmethod
+    def _mcdr_value_type(value: Any, meta: dict[str, Any]) -> str:
+        meta_type = meta.get("type")
+        if meta_type:
+            return str(meta_type)
+        if isinstance(value, bool) or type(value).__name__ == "ScalarBoolean":
+            return "bool"
+        if isinstance(value, int):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        if isinstance(value, str):
+            return "str"
+        if isinstance(value, list):
+            return "list"
+        return "none"
+
+    def _flatten_mcdr_entries(self, data: dict[str, Any]) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+
+        def walk(obj: dict[str, Any], prefix: str = "", inherited_category: str | None = None) -> None:
+            for key, value in obj.items():
+                path = f"{prefix}.{key}" if prefix else key
+                meta = _MCDR_CONFIG_META.get(path, {})
+                category = str(meta.get("category") or inherited_category or "other")
+                if isinstance(value, dict):
+                    walk(value, path, category)
+                    continue
+                entry_type = MCDRBridge._mcdr_value_type(value, meta)
+                nullable = bool(meta.get("nullable", False)) or (value is None and entry_type == "none")
+                sensitive = bool(meta.get("sensitive", False))
+                options = [str(option) for option in (meta.get("options") or [])]
+                if isinstance(value, str) and value and value not in options:
+                    options.append(value)
+                entries.append(
+                    {
+                        "key": path,
+                        "category": category,
+                        "type": entry_type,
+                        "value": "" if sensitive else value,
+                        "has_value": value is not None and value != "",
+                        "nullable": nullable,
+                        "sensitive": sensitive,
+                        "input": bool(meta.get("input", False)),
+                        "options": options or None,
+                    }
+                )
+
+        walk(data)
+        return entries
+
+    def _mcdr_config_data(self) -> dict[str, Any]:
+        """Build the visual MCDR config schema. Call from MCDR's TaskExecutor."""
+        path = self._mcdr_config_path()
+        stat = path.stat()
+        loaded = MCDRBridge._plain_yaml(self.server.get_mcdr_config() or {})
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                file_data = MCDRBridge._plain_yaml(YAML().load(file) or {})
+        except Exception:
+            file_data = {}
+        merged = MCDRBridge._merge_mcdr_defaults(
+            loaded if isinstance(loaded, dict) else {},
+            file_data if isinstance(file_data, dict) else {},
+        )
+        entries = self._flatten_mcdr_entries(merged)
+        categories = [
+            category
+            for category in _MCDR_CONFIG_CATEGORY_ORDER
+            if any(entry["category"] == category for entry in entries)
+        ]
+        return {
+            "path": core_constant.CONFIG_FILE_PATH,
+            "size": stat.st_size,
+            "mtime": stat.st_mtime,
+            "editable": True,
+            "entries": entries,
+            "categories": categories,
+        }
+
+    @staticmethod
+    def _mcdr_config_signature(path: Path) -> tuple[tuple[tuple[str, int], str], str]:
+        try:
+            stat = path.stat()
+        except OSError:
+            return ((str(path), 0), ""), core_constant.VERSION
+        return ((str(path), stat.st_mtime_ns), ""), core_constant.VERSION
+
+    def mcdr_config(self) -> dict[str, Any]:
+        """Return a version-aware visual schema for MCDR's config.yml."""
+        path = self._mcdr_config_path()
+        signature = self._mcdr_config_signature(path)
+        with self._mcdr_config_lock:
+            if self._mcdr_config_cache is not None and self._mcdr_config_cache[0] == signature:
+                return self._mcdr_config_cache[1]
+        data = self.call(self._mcdr_config_data)
+        with self._mcdr_config_lock:
+            self._mcdr_config_cache = (signature, data)
+        return data
+
+    @staticmethod
+    def _coerce_mcdr_value(existing: Any, value: Any) -> Any:
+        if isinstance(existing, bool) or type(existing).__name__ == "ScalarBoolean":
+            return bool(value)
+        if isinstance(existing, int) and not isinstance(existing, bool):
+            try:
+                return int(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Expected an integer, got {value!r}") from error
+        if isinstance(existing, float):
+            try:
+                return float(value)
+            except (TypeError, ValueError) as error:
+                raise ValueError(f"Expected a number, got {value!r}") from error
+        if isinstance(existing, list):
+            if value is None:
+                return None
+            if not isinstance(value, list):
+                raise ValueError(f"Expected a list, got {value!r}")
+            return value
+        return value
+
+    def _apply_mcdr_changes(self, path: Path, changes: dict[str, Any]) -> list[str]:
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                data = YAML().load(file)
+        except Exception as error:
+            raise ValueError(f"Cannot parse config.yml: {error}") from error
+        if not isinstance(data, dict):
+            data = {}
+        applied: list[str] = []
+        for key_path, raw_value in changes.items():
+            parts = key_path.split(".")
+            if not parts or any(not part for part in parts):
+                raise ValueError(f"Invalid MCDR config key: {key_path}")
+            if _MCDR_CONFIG_META.get(key_path, {}).get("sensitive") and raw_value == "":
+                continue
+            node: Any = data
+            for part in parts[:-1]:
+                if not isinstance(node, dict):
+                    raise ValueError(f"Invalid MCDR config key: {key_path}")
+                if part not in node:
+                    node[part] = {}
+                node = node[part]
+            if not isinstance(node, dict):
+                raise ValueError(f"Invalid MCDR config key: {key_path}")
+            if parts[-1] in node:
+                new_value = MCDRBridge._coerce_mcdr_value(node[parts[-1]], raw_value)
+            else:
+                new_value = raw_value
+            node[parts[-1]] = new_value
+            applied.append(key_path)
+        if not applied:
+            raise ValueError("No changes supplied")
+        yaml = YAML()
+        yaml.width = 1048576  # don't wrap long strings, same as MCDR
+        buffer = StringIO()
+        yaml.dump(data, buffer)
+        encoded = buffer.getvalue().encode("utf-8")
+        original_mode = path.stat().st_mode & 0o7777
+        temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_bytes(encoded)
+            os.chmod(temporary, original_mode)
+            os.replace(temporary, path)
+        except OSError as error:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise ValueError(f"Cannot write config.yml: {error}") from error
+        return applied
+
+    def update_mcdr_config(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Apply structured changes to config.yml, then reload MCDR config immediately."""
+        if not isinstance(changes, dict) or not changes:
+            raise ValueError("No changes supplied")
+        path = self._mcdr_config_path()
+        applied = self._apply_mcdr_changes(path, changes)
+
+        def reload_config() -> None:
+            # Equivalent to the console command `!!MCDR reload config`
+            self.server.reload_config_file(log=True)
+
+        try:
+            self.call(reload_config, timeout=10.0)
+        except Exception as error:
+            raise RuntimeError(f"config.yml saved, but !!MCDR reload config failed: {error}") from error
+        with self._mcdr_config_lock:
+            self._mcdr_config_cache = None
+        return {"applied": applied, "reloaded": True}
+
+    def prewarm_mcdr_config(self) -> None:
+        """Detect the current MCDR config schema during plugin load.
+
+        Best-effort: a missing/invalid config.yml only degrades the first page load,
+        it never prevents the panel from starting.
+        """
+        try:
+            path = self._mcdr_config_path()
+            data = self._mcdr_config_data()
+            signature = self._mcdr_config_signature(path)
+        except Exception:
+            return
+        with self._mcdr_config_lock:
+            self._mcdr_config_cache = (signature, data)
 
     def _sync_instant_keys(self, current: dict[str, str]) -> None:
         """Fold server commands that apply immediately (e.g. whitelist on/off) into

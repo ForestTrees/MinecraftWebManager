@@ -15,7 +15,7 @@ from .web import WebService
 
 PLUGIN_METADATA = {
     "id": "minecraft_web_manager",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "name": "Minecraft Web Manager",
     "dependencies": {"mcdreforged": ">=2.15.0"},
 }
@@ -52,6 +52,9 @@ def on_load(server, prev_module) -> None:
     # Load (or create) the effective-value baseline for tracking saved-but-not-yet
     # effective server.properties changes; survives plugin reloads and MCDR restarts.
     bridge.bootstrap_pending(server.logger)
+    # Detect which MCDR config.yml keys this MCDR version exposes, so the web UI can
+    # render the matching visual editor even when the schema changes between versions.
+    bridge.prewarm_mcdr_config()
     _history = MetricsHistory(bridge.sample, server.logger)
     try:
         _history.start()

@@ -1,4 +1,5 @@
-const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting', mods: [], manageSubtab: 'plugins', manageBusy: false, configModal: { type: null, files: [], current: null, dirty: false }, pluginUpdates: {}, pluginChecked: new Set() };
+const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting', mods: [], manageSubtab: 'plugins', manageBusy: false, configModal: { type: null, files: [], current: null, dirty: false }, pluginUpdates: {}, pluginChecked: new Set(), worldSubtab: 'properties' };
+const mcdrConfigState = { loaded: false, path: 'config.yml', entries: [], categories: [], dirty: new Map(), editable: false, reason: null, size: 0 };
 const $ = (id) => document.getElementById(id);
 const T = (key, params) => (window.MWMI18N ? window.MWMI18N.t(key, params) : key);
 
@@ -736,6 +737,301 @@ async function refreshProperties() {
   }
 }
 
+/* ---------- MCDR config.yml visual editor ---------- */
+const MCDR_FIELD_LABELS_ZH = {
+  language: '语言',
+  working_directory: '服务器工作目录',
+  start_command: '启动命令',
+  handler: '服务端处理器',
+  encoding: '编码（MCDR → 服务器）',
+  decoding: '解码（服务器 → MCDR）',
+  'rcon.enable': '启用 RCON',
+  'rcon.address': 'RCON 地址',
+  'rcon.port': 'RCON 端口',
+  'rcon.password': 'RCON 密码',
+  plugin_directories: '插件目录',
+  catalogue_meta_cache_ttl: '插件目录缓存 TTL（秒）',
+  catalogue_meta_fetch_timeout: '插件目录获取超时（秒）',
+  catalogue_meta_url: '插件目录 URL 覆盖',
+  plugin_download_url: '插件下载 URL 覆盖',
+  plugin_download_timeout: '插件下载超时（秒）',
+  plugin_pip_install_extra_args: 'pip 安装额外参数',
+  check_update: '自动检查更新',
+  advanced_console: '高级控制台',
+  http_proxy: 'HTTP 代理',
+  https_proxy: 'HTTPS 代理',
+  telemetry: '遥测数据',
+  disable_console_thread: '禁用控制台线程',
+  disable_console_color: '禁用控制台颜色',
+  custom_handlers: '自定义 Handler',
+  custom_info_reactors: '自定义 Info Reactor',
+  watchdog_threshold: '看门狗阈值（秒）',
+  handler_detection: '启动时检测 Handler',
+  'debug.all': '全部调试',
+  'debug.mcdr': 'MCDR 调试',
+  'debug.process': '进程调试',
+  'debug.handler': 'Handler 调试',
+  'debug.reactor': 'Reactor 调试',
+  'debug.plugin': '插件调试',
+  'debug.permission': '权限调试',
+  'debug.command': '命令调试',
+  'debug.task_executor': '任务执行器调试',
+  'debug.telemetry': '遥测调试',
+  write_server_output_to_log_file: '服务器输出写入日志文件',
+};
+const MCDR_FIELD_LABELS_EN = {
+  language: 'Language',
+  working_directory: 'Server working directory',
+  start_command: 'Start command',
+  handler: 'Server handler',
+  encoding: 'Encoding (MCDR → server)',
+  decoding: 'Decoding (server → MCDR)',
+  'rcon.enable': 'Enable RCON',
+  'rcon.address': 'RCON address',
+  'rcon.port': 'RCON port',
+  'rcon.password': 'RCON password',
+  plugin_directories: 'Plugin directories',
+  catalogue_meta_cache_ttl: 'Catalogue meta cache TTL (s)',
+  catalogue_meta_fetch_timeout: 'Catalogue meta fetch timeout (s)',
+  catalogue_meta_url: 'Catalogue meta URL override',
+  plugin_download_url: 'Plugin download URL override',
+  plugin_download_timeout: 'Plugin download timeout (s)',
+  plugin_pip_install_extra_args: 'Extra pip install args',
+  check_update: 'Check for updates',
+  advanced_console: 'Advanced console',
+  http_proxy: 'HTTP proxy',
+  https_proxy: 'HTTPS proxy',
+  telemetry: 'Telemetry',
+  disable_console_thread: 'Disable console thread',
+  disable_console_color: 'Disable console color',
+  custom_handlers: 'Custom handlers',
+  custom_info_reactors: 'Custom info reactors',
+  watchdog_threshold: 'Watchdog threshold (s)',
+  handler_detection: 'Handler detection on startup',
+  'debug.all': 'All debug',
+  'debug.mcdr': 'MCDR debug',
+  'debug.process': 'Process debug',
+  'debug.handler': 'Handler debug',
+  'debug.reactor': 'Reactor debug',
+  'debug.plugin': 'Plugin debug',
+  'debug.permission': 'Permission debug',
+  'debug.command': 'Command debug',
+  'debug.task_executor': 'Task executor debug',
+  'debug.telemetry': 'Telemetry debug',
+  write_server_output_to_log_file: 'Write server output to log file',
+};
+function mcdrFieldLabel(key) {
+  const dict = (MWMI18N.getLang() === 'zh' ? MCDR_FIELD_LABELS_ZH : MCDR_FIELD_LABELS_EN);
+  return dict[key] || key;
+}
+
+function updateMcdrConfigSaveButton() {
+  const save = $('mcdr-config-save');
+  if (save) save.disabled = !(mcdrConfigState.loaded && mcdrConfigState.editable && mcdrConfigState.dirty.size > 0);
+}
+
+function updateMcdrConfigCount() {
+  const el = $('mcdr-config-count');
+  if (el) el.textContent = T('mcdr_count', { total: mcdrConfigState.entries.length, modified: mcdrConfigState.dirty.size });
+}
+
+function mcdrConfigControl(entry) {
+  const key = entry.key;
+  const id = `mcdr-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+  if (entry.sensitive) {
+    const hint = entry.has_value ? T('prop_set_hint') : T('prop_not_set');
+    const current = entry.value ? ` value="${escapeHtml(entry.value)}"` : '';
+    return `<input id="${id}" class="field" type="password" data-mcdr-prop="${escapeHtml(key)}" placeholder="${hint}" autocomplete="new-password"${current} />`;
+  }
+  if (entry.input) {
+    const displayValue = Array.isArray(entry.value) ? entry.value.join(', ') : (entry.value == null ? '' : String(entry.value));
+    const placeholder = Array.isArray(entry.value) ? escapeHtml(T('mcdr_input_list_hint')) : '';
+    return `<input id="${id}" class="field" data-mcdr-prop="${escapeHtml(key)}" value="${escapeHtml(displayValue)}" placeholder="${placeholder}" />`;
+  }
+  if (entry.type === 'bool') {
+    return `<label class="switch"><input id="${id}" type="checkbox" data-mcdr-prop="${escapeHtml(key)}" ${entry.value ? 'checked' : ''} /><span>${entry.value ? T('prop_on') : T('prop_off')}</span></label>`;
+  }
+  if (entry.options && entry.options.length) {
+    const current = entry.value == null ? '' : String(entry.value);
+    return `<select id="${id}" class="field" data-mcdr-prop="${escapeHtml(key)}">${entry.options
+      .map((option) => `<option value="${escapeHtml(option)}"${option === current ? ' selected' : ''}>${escapeHtml(option)}</option>`)
+      .join('')}</select>`;
+  }
+  if (entry.type === 'int' || entry.type === 'float') {
+    const step = entry.type === 'int' ? '1' : 'any';
+    return `<input id="${id}" class="field" type="number" step="${step}" data-mcdr-prop="${escapeHtml(key)}" value="${escapeHtml(entry.value == null ? '' : String(entry.value))}" />`;
+  }
+  if (entry.type === 'list') {
+    const value = Array.isArray(entry.value) ? entry.value.join('\n') : '';
+    return `<textarea id="${id}" class="field mcdr-list-field" rows="3" data-mcdr-prop="${escapeHtml(key)}" placeholder="${escapeHtml(T('mcdr_list_hint'))}">${escapeHtml(value)}</textarea>`;
+  }
+  return `<input id="${id}" class="field" data-mcdr-prop="${escapeHtml(key)}" value="${escapeHtml(entry.value == null ? '' : String(entry.value))}" />`;
+}
+
+function parseMcdrInput(entry, rawValue) {
+  if (entry.input) {
+    const text = String(rawValue).trim();
+    if (Array.isArray(entry.value)) {
+      if (entry.nullable && text === '') return null;
+      return text.split(',').map((part) => part.trim()).filter(Boolean);
+    }
+    return text;
+  }
+  if (entry.type === 'bool') return !!rawValue;
+  if (entry.type === 'int') {
+    const text = String(rawValue).trim();
+    if (text === '') return entry.nullable ? null : '';
+    if (!/^-?\d+$/.test(text)) return { invalid: true };
+    return Number(text);
+  }
+  if (entry.type === 'float') {
+    const text = String(rawValue).trim();
+    if (text === '') return entry.nullable ? null : '';
+    const number = Number(text);
+    if (!Number.isFinite(number)) return { invalid: true };
+    return number;
+  }
+  if (entry.type === 'list') {
+    if (entry.nullable && String(rawValue).trim() === '') return null;
+    return String(rawValue).split('\n').map((line) => line.replace(/\r$/, '')).filter((line) => line.trim() !== '');
+  }
+  if (entry.type === 'none') return String(rawValue) === '' ? null : String(rawValue);
+  return String(rawValue);
+}
+
+function mcdrValuesEqual(entry, value) {
+  const original = entry.value;
+  if (Array.isArray(original) || Array.isArray(value)) {
+    return JSON.stringify(original ?? null) === JSON.stringify(value ?? null);
+  }
+  return original === value;
+}
+
+function markMcdrDirty(key, rawValue) {
+  const entry = mcdrConfigState.entries.find((item) => item.key === key);
+  if (!entry) return;
+  if (entry.sensitive && rawValue === '') {
+    mcdrConfigState.dirty.delete(key);
+    updateMcdrConfigSaveButton();
+    updateMcdrConfigCount();
+    return;
+  }
+  const parsed = parseMcdrInput(entry, rawValue);
+  if (parsed && parsed.invalid) return;
+  if (mcdrValuesEqual(entry, parsed)) mcdrConfigState.dirty.delete(key);
+  else mcdrConfigState.dirty.set(key, parsed);
+  updateMcdrConfigSaveButton();
+  updateMcdrConfigCount();
+}
+
+function renderMcdrConfig() {
+  updateMcdrConfigCount();
+  if (!mcdrConfigState.editable) return;
+  const container = $('mcdr-config-list');
+  if (!container) return;
+  const filter = ($('mcdr-config-filter')?.value || '').trim().toLowerCase();
+  const rows = mcdrConfigState.entries.filter((entry) => {
+    if (!filter) return true;
+    return entry.key.toLowerCase().includes(filter) || mcdrFieldLabel(entry.key).toLowerCase().includes(filter);
+  });
+  if (!rows.length) {
+    container.innerHTML = `<p class="hint">${T('prop_none')}</p>`;
+    return;
+  }
+  const groups = new Map();
+  for (const entry of rows) {
+    if (!groups.has(entry.category)) groups.set(entry.category, []);
+    groups.get(entry.category).push(entry);
+  }
+  container.innerHTML = mcdrConfigState.categories.filter((category) => groups.has(category)).map((category) => `
+    <h3 class="section-title">${escapeHtml(T(`mcdr_cat_${category}`))}</h3>
+    <div class="mcdr-config-grid">${groups.get(category).map((entry) => {
+      const isDirty = mcdrConfigState.dirty.has(entry.key);
+      const displayEntry = isDirty ? { ...entry, value: mcdrConfigState.dirty.get(entry.key) } : entry;
+      return `
+        <div class="property-card${isDirty ? ' dirty' : ''}">
+          <div class="property-label">
+            <span class="property-name">${escapeHtml(mcdrFieldLabel(entry.key))}</span>
+            <span class="property-key mono">${escapeHtml(entry.key)}</span>
+          </div>
+          <div class="property-control">${mcdrConfigControl(displayEntry)}</div>
+        </div>`;
+    }).join('')}</div>
+  `).join('');
+}
+
+async function refreshMcdrConfig(force = false) {
+  if (mcdrConfigState.loaded && !force) return;
+  if (force && mcdrConfigState.dirty.size > 0) {
+    const ok = await confirmDialog(T('mod_config_discard_confirm'), {
+      title: T('mod_config_discard_title'),
+      confirmText: T('mod_config_discard_ok'),
+    });
+    if (!ok) return;
+    mcdrConfigState.dirty.clear();
+  }
+  try {
+    const data = await api('/api/mcdr/config');
+    mcdrConfigState.loaded = true;
+    mcdrConfigState.path = data.path || 'config.yml';
+    mcdrConfigState.entries = data.entries || [];
+    mcdrConfigState.categories = data.categories || [];
+    mcdrConfigState.editable = !!data.editable;
+    mcdrConfigState.reason = data.reason || null;
+    mcdrConfigState.size = data.size || 0;
+    mcdrConfigState.dirty.clear();
+    const pathEl = $('mcdr-config-path');
+    if (pathEl) pathEl.textContent = mcdrConfigState.path;
+    const container = $('mcdr-config-list');
+    if (container) {
+      container.innerHTML = mcdrConfigState.editable
+        ? ''
+        : `<p class="hint">${mcdrConfigState.reason === 'too_large' ? escapeHtml(T('mod_config_too_large', { size: formatBytes(mcdrConfigState.size) })) : escapeHtml(T('mod_config_binary'))}</p>`;
+    }
+    renderMcdrConfig();
+    updateMcdrConfigSaveButton();
+  } catch (error) {
+    const container = $('mcdr-config-list');
+    if (container) container.innerHTML = `<p class="hint">${escapeHtml(T('load_failed', { error: error.message }))}</p>`;
+  }
+}
+
+async function saveMcdrConfig() {
+  if (!mcdrConfigState.loaded || !mcdrConfigState.editable || mcdrConfigState.dirty.size === 0) return;
+  const confirmed = await confirmDialog(
+    T('mcdr_config_save_confirm', { name: mcdrConfigState.path }),
+    { title: T('mcdr_config_save_title'), confirmText: T('save') }
+  );
+  if (!confirmed) return;
+  const changes = Object.fromEntries(mcdrConfigState.dirty);
+  try {
+    const result = await api('/api/mcdr/config', { method: 'PUT', body: JSON.stringify({ changes }) });
+    mcdrConfigState.dirty.clear();
+    updateMcdrConfigSaveButton();
+    updateMcdrConfigCount();
+    showToast(T('mcdr_config_saved_reloaded', { name: mcdrConfigState.path }));
+    try {
+      await refreshMcdrConfig(true);
+    } catch (error) {
+      console.warn(error);
+    }
+  } catch (error) {
+    showToast(T('mcdr_config_save_failed', { error: error.message }), { type: 'error' });
+  }
+}
+
+function setWorldSubtab(subtab) {
+  state.worldSubtab = subtab;
+  document.querySelectorAll('#world-subtabs button').forEach((button) => {
+    button.classList.toggle('active', button.dataset.worldSubtab === subtab);
+  });
+  document.querySelectorAll('[data-world-subview]').forEach((panel) => {
+    panel.classList.toggle('active', panel.dataset.worldSubview === subtab);
+  });
+  if (subtab === 'properties') refreshProperties();
+  else if (subtab === 'mcdr') refreshMcdrConfig();
+}
+
 /* ---------- plugins + mods ---------- */
 // While a plugin/mod operation is in flight every management button is disabled
 // so the same action cannot be double-clicked or started concurrently.
@@ -946,7 +1242,9 @@ async function refreshConfigModalFiles() {
   const endpoint = type === 'plugin' ? '/api/plugins/configs' : '/api/mods/configs';
   try {
     const data = await api(endpoint);
-    state.configModal.files = (data.files || []).filter((file) => file.path !== '.DS_Store');
+    state.configModal.files = (data.files || []).filter((file) => (
+      file.path !== '.DS_Store' && !file.path.split('/').includes('pending_properties.json')
+    ));
     renderConfigModalList();
   } catch (error) {
     const list = $('config-modal-files');
@@ -1470,6 +1768,30 @@ document.querySelectorAll('#manage-subtabs button').forEach((button) => {
   button.addEventListener('click', () => setManageSubtab(button.dataset.manageSubtab));
 });
 
+document.querySelectorAll('#world-subtabs button').forEach((button) => {
+  button.addEventListener('click', () => setWorldSubtab(button.dataset.worldSubtab));
+});
+
+if ($('mcdr-config-list')) {
+  $('mcdr-config-list').addEventListener('input', (event) => {
+    const field = event.target.closest('[data-mcdr-prop]');
+    if (!field) return;
+    const value = field.type === 'checkbox' ? field.checked : field.value;
+    markMcdrDirty(field.dataset.mcdrProp, value);
+    if (field.type === 'checkbox') {
+      const text = field.parentElement.querySelector('span');
+      if (text) text.textContent = field.checked ? T('prop_on') : T('prop_off');
+    }
+  });
+  $('mcdr-config-list').addEventListener('change', (event) => {
+    const field = event.target.closest('select[data-mcdr-prop], textarea[data-mcdr-prop]');
+    if (field) markMcdrDirty(field.dataset.mcdrProp, field.type === 'textarea' ? field.value : field.value);
+  });
+  $('mcdr-config-save').addEventListener('click', saveMcdrConfig);
+  $('mcdr-config-reload').addEventListener('click', () => refreshMcdrConfig(true));
+  $('mcdr-config-filter').addEventListener('input', renderMcdrConfig);
+}
+
 if ($('config-modal')) {
   $('config-modal').addEventListener('mousedown', (event) => {
     if (event.target === $('config-modal')) closeConfigModal();
@@ -1518,7 +1840,7 @@ function switchView(view) {
   document.querySelectorAll('.view').forEach((panel) => panel.classList.toggle('active', panel.dataset.viewPanel === view));
   if (view === 'players') refreshRoster();
   if (view === 'manage') setManageSubtab(state.manageSubtab);
-  if (view === 'world') { refreshProperties(); refreshPlugins(); refreshMods(); }
+  if (view === 'world') { setWorldSubtab(state.worldSubtab); refreshPlugins(); refreshMods(); }
   // charts can only measure themselves once their panel is visible
   if (view === 'performance') refreshCharts();
 }
@@ -1707,6 +2029,14 @@ document.addEventListener('mwm:langchange', () => {
           : T('mod_config_binary');
     }
   }
-  if (state.activeView === 'world') { refreshProperties(); refreshMods(); }
+  if (state.activeView === 'world') {
+    setWorldSubtab(state.worldSubtab);
+    refreshMods();
+    if (mcdrConfigState.loaded) {
+      const pathEl = $('mcdr-config-path');
+      if (pathEl) pathEl.textContent = mcdrConfigState.path;
+      renderMcdrConfig();
+    }
+  }
   if (state.activeView === 'performance') refreshCharts();
 });

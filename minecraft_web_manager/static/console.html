@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>__MWM_PANEL_TITLE__</title>
     <meta name="mwm-panel-title" content="__MWM_PANEL_TITLE__" />
-    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=36" />
-    <link rel="stylesheet" href="/assets/style.css?v=36" />
-    <script src="/assets/theme.js?v=36"></script>
-    <script src="/assets/i18n.js?v=36"></script>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=40" />
+    <link rel="stylesheet" href="/assets/style.css?v=40" />
+    <script src="/assets/theme.js?v=40"></script>
+    <script src="/assets/i18n.js?v=40"></script>
   </head>
   <body>
     <div class="app">
@@ -268,30 +268,56 @@
 
           <!-- World -->
           <section class="view" data-view-panel="world">
-            <div class="world-layout">
+            <div class="world-toolbar">
+              <div class="subtabs" id="world-subtabs" role="group">
+                <button type="button" class="active" data-world-subtab="properties"><span data-i18n="world_sub_server">服务器配置</span></button>
+                <button type="button" data-world-subtab="mcdr"><span data-i18n="world_sub_mcdr">MCDR 配置</span></button>
+              </div>
+            </div>
+
+            <div class="subview active" data-world-subview="properties">
+              <div class="world-layout">
+                <div class="panel">
+                  <div class="panel-head world-panel-head">
+                    <h2 data-i18n="world_title">服务器配置</h2>
+                    <div class="inline-actions">
+                      <input id="properties-filter" class="field sm-field" data-i18n-placeholder="filter_ph" placeholder="筛选配置项…" autocomplete="off" />
+                      <span class="hint" id="properties-count"></span>
+                      <button id="properties-save" class="btn sm" type="button" disabled data-i18n="save_changes">保存修改</button>
+                    </div>
+                  </div>
+                  <p class="hint" data-i18n="properties_hint">修改后需<strong>重启服务端</strong>才会生效；密码类配置留空表示保持不变。</p>
+                  <div id="properties-list" class="properties-grid" data-i18n="loading">正在读取…</div>
+                </div>
+
+                <aside class="world-side">
+                  <div class="panel">
+                    <div class="panel-head"><h2 data-i18n="loaded_plugins">已加载插件</h2><span class="hint" id="plugins-count"></span></div>
+                    <ul id="plugins" class="plugins scroll-area"><li data-i18n="loading">正在读取…</li></ul>
+                  </div>
+                  <div class="panel">
+                    <div class="panel-head"><h2 data-i18n="loaded_mods">已加载 Mod</h2><span class="hint" id="mods-count"></span></div>
+                    <ul id="mods" class="plugins scroll-area"><li data-i18n="loading">正在读取…</li></ul>
+                  </div>
+                </aside>
+              </div>
+            </div>
+
+            <div class="subview" data-world-subview="mcdr">
               <div class="panel">
-                <div class="panel-head world-panel-head">
-                  <h2 data-i18n="world_title">服务器配置</h2>
+                <div class="panel-head world-panel-head mcdr-panel-head">
+                  <h2 data-i18n="mcdr_config_title">MCDR 配置</h2>
                   <div class="inline-actions">
-                    <input id="properties-filter" class="field sm-field" data-i18n-placeholder="filter_ph" placeholder="筛选配置项…" autocomplete="off" />
-                    <span class="hint" id="properties-count"></span>
-                    <button id="properties-save" class="btn sm" type="button" disabled data-i18n="save_changes">保存修改</button>
+                    <span class="hint mono" id="mcdr-config-path"></span>
+                    <input id="mcdr-config-filter" class="field sm-field" data-i18n-placeholder="filter_ph" placeholder="筛选配置项…" autocomplete="off" />
+                    <span class="hint" id="mcdr-config-count"></span>
+                    <button id="mcdr-config-reload" class="btn ghost sm" type="button" data-i18n="mcdr_config_reload">重新读取</button>
+                    <button id="mcdr-config-save" class="btn sm" type="button" disabled data-i18n="mod_config_save">保存配置</button>
                   </div>
                 </div>
-                <p class="hint" data-i18n="properties_hint">修改后需<strong>重启服务端</strong>才会生效；密码类配置留空表示保持不变。</p>
-                <div id="properties-list" class="properties-grid" data-i18n="loading">正在读取…</div>
+                <p class="hint" data-i18n="mcdr_config_hint">以可视化卡片修改 MCDR 的 config.yml；保存后会自动执行 <strong>!!MCDR reload config</strong> 生效。RCON 密码留空表示保持不变。</p>
+                <div id="mcdr-config-list" class="mcdr-config-list" data-i18n="loading">正在读取…</div>
               </div>
-
-              <aside class="world-side">
-                <div class="panel">
-                  <div class="panel-head"><h2 data-i18n="loaded_plugins">已加载插件</h2><span class="hint" id="plugins-count"></span></div>
-                  <ul id="plugins" class="plugins scroll-area"><li data-i18n="loading">正在读取…</li></ul>
-                </div>
-                <div class="panel">
-                  <div class="panel-head"><h2 data-i18n="loaded_mods">已加载 Mod</h2><span class="hint" id="mods-count"></span></div>
-                  <ul id="mods" class="plugins scroll-area"><li data-i18n="loading">正在读取…</li></ul>
-                </div>
-              </aside>
             </div>
           </section>
 
@@ -385,7 +411,7 @@
       </div>
     </div>
 
-    <script src="/assets/chart.js?v=36"></script>
-    <script src="/assets/console.js?v=36"></script>
+    <script src="/assets/chart.js?v=40"></script>
+    <script src="/assets/console.js?v=40"></script>
   </body>
 </html>

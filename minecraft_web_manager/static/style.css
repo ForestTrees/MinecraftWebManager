@@ -250,7 +250,7 @@ input.field:focus, select.field:focus {
 .plugins { list-style: none; padding: 0; margin: 0; max-height: 340px; overflow: auto; display: grid; gap: .1rem; }
 .plugins li { padding: .6rem .2rem; border-bottom: 1px solid var(--border); }
 .plugins li:last-child { border-bottom: 0; }
-.plugins .p-name { font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugins .p-name { font-size: .92rem; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .plugins .p-meta { font-size: .78rem; color: var(--text-muted); margin-top: .15rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---------- server actions ---------- */
@@ -271,6 +271,8 @@ input.field:focus, select.field:focus {
 .manage-table { table-layout: fixed; }
 .manage-table th, .manage-table td { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .manage-table .p-name, .manage-table .p-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.manage-table .p-name { font-size: .92rem; font-weight: 700; color: var(--text); }
+.manage-table .p-meta { font-size: .78rem; color: var(--text-muted); margin-top: .15rem; }
 .manage-plugins th:nth-child(1) { width: 34%; }
 .manage-plugins th:nth-child(2) { width: 24%; }
 .manage-plugins th:nth-child(3) { width: 12%; }
@@ -377,6 +379,7 @@ input.field:focus, select.field:focus {
 .manage-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
 .manage-toolbar .subtabs { flex: 0 0 auto; }
 .manage-toolbar .subview-head { margin-bottom: 0; margin-left: auto; }
+.world-toolbar { display: flex; align-items: center; margin-bottom: 1rem; }
 .section-title { font-size: .85rem; font-weight: 700; color: var(--text-muted); margin: 1.2rem 0 .6rem; }
 .subview .section-title:first-child { margin-top: 0; }
 
@@ -427,6 +430,13 @@ input.field:focus, select.field:focus {
   max-height: calc(100vh - 280px); min-height: 120px; overflow: auto; overscroll-behavior: contain;
   padding: .15rem .25rem .3rem; margin-top: .8rem;
 }
+.mcdr-config-list {
+  max-height: calc(100vh - 320px); min-height: 120px; overflow: auto; overscroll-behavior: contain;
+  padding: .15rem .25rem .3rem; margin-top: .8rem;
+}
+.mcdr-config-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .7rem;
+}
 .property-card {
   display: flex; flex-direction: column; gap: .45rem; padding: .7rem .8rem; min-width: 0;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 12px;
@@ -453,6 +463,8 @@ input.field:focus, select.field:focus {
   .mod-config-layout { grid-template-columns: 1fr; }
   .config-editor { min-height: 360px; }
   .properties-grid { max-height: 60vh; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .mcdr-config-list { max-height: 60vh; }
+  .mcdr-config-grid { grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
   .world-panel-head { flex-wrap: wrap; }
 }
 

@@ -2,13 +2,13 @@
 
 [English](README_en.md) | **中文**
 
-一个 [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) 插件，为 Minecraft 服务器提供带登录鉴权的网页管理面板：实时控制台、玩家管理、插件与 Mod 在线管理、`server.properties` 在线编辑、Mod 配置文件编辑、资源占用图表。
+一个 [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) 插件，为 Minecraft 服务器提供带登录鉴权的网页管理面板：实时控制台、玩家管理、插件与 Mod 在线管理、`server.properties` 与 MCDR `config.yml` 在线编辑、Mod 配置文件编辑、资源占用图表。
 
 面板由插件自身托管，无需另外部署 Web 服务器，也不依赖任何 CDN 或前端构建工具。
 
-- **版本**：1.1.0
+- **版本**：1.2.0
 - **依赖**：MCDReforged `>=2.15.0`、Python 3.10+
-- **Python 库**：`fastapi`、`uvicorn[standard]`、`python-multipart`、`psutil`
+- **Python 库**：`fastapi`、`uvicorn[standard]`、`python-multipart`、`psutil`、`ruamel-yaml`
 
 ---
 
@@ -57,7 +57,10 @@
 
 ### World
 
+World 页顶部通过「服务器配置 / MCDR 配置」两个子页签切换。
+
 - **服务器配置**：在线查看与修改 `server.properties`，配置项带中文/英文说明并以响应式卡片网格展示，枚举项（难度、游戏模式等）以下拉框呈现，支持关键字筛选，工具栏显示配置总数与已修改数量；保存时只改动你修改过的项，注释与顺序原样保留，已修改卡片高亮。保存后尚未重启的配置项会标记为「待重启生效」并显示原值/新值（敏感项只提示已修改、不显示值），插件重载或直接改配置文件后依然可追踪，服务器重启后自动清除
+- **MCDR 配置**：插件加载时按当前 MCDR 版本的 `config.yml` 生成可视化配置卡片（按基础 / 服务器 / 插件 / 其它 / 高级 / 调试分组），布尔、数字、枚举等都有对应控件；启动命令、RCON 地址、服务器工作目录、编码、解码、插件目录等使用单行输入框，列表型字段（如插件目录、命令数组）在输入框内用英文逗号分隔。兼容不同 MCDR 版本，只展示当前版本实际存在的配置项，新版本新增的未知字段用通用输入框保留。RCON 密码只显示为空、留空保持不变。保存后自动执行 `!!MCDR reload config` 立即生效
 - **已加载插件 / 已加载 Mod**：常驻在页面右侧栏（无需滚动到底部），插件可单独重载，Mod 读取服务端 `mods/` 目录下 Fabric mod 的 `fabric.mod.json` 显示名称与版本，禁用状态也会标注；完整操作入口在「插件与 Mod」页
 
 ![World](docs/img/world.png)
@@ -155,7 +158,7 @@ http://127.0.0.1:8088
 - Minecraft 端：`server/server.properties` 里的 `enable-rcon`、`rcon.port`、`rcon.password`
 - MCDR 端：MCDR 的 `config.yml` 里的 `rcon` 段
 
-其中 Minecraft 端的三项可以直接在面板的「World → 服务器配置」里改（改完需重启服务器）。
+其中 Minecraft 端的三项可以直接在面板的「World → 服务器配置」里改（改完需重启服务器）；MCDR 端可以在「World → MCDR 配置」里改，保存后会自动执行 `!!MCDR reload config` 生效。
 
 ---
 
@@ -178,6 +181,7 @@ http://127.0.0.1:8088
   ```
 
 - `rcon.password` 等敏感配置项在面板里只显示为空，不会下发到浏览器；留空提交表示保持原值不变
+- MCDR 配置编辑器按字段展示，RCON 密码不会回显；留空提交表示保持原值不变
 
 ---
 
@@ -187,6 +191,7 @@ http://127.0.0.1:8088
 - **世界种子、名称、难度读自存档文件**，只在服务器存盘时更新，可能比实际状态滞后几分钟
 - **玩家的 IP 与 UUID 靠解析服务器输出获得**，如果服务端日志格式特殊可能抓不到；插件重载后恢复的在线玩家没有加入时间与 IP
 - **Mod 列表只识别 Fabric**（读取 `fabric.mod.json`），Forge / NeoForge mod 只会列出文件名；上传、禁用、删除按 `.jar` 文件管理，不区分加载器
+- **MCDR 配置以可视化字段编辑**，写入时由 ruamel.yaml 重新生成文件；配置项集合随 MCDR 版本自动识别，新版本新增的未知字段会用通用输入框展示
 - **插件检查更新 / 更新依赖 MCDR 插件仓库网络访问**，且只有打包插件（`.mcdr` / `.pyz`）可更新；检查与更新的详细输出显示在实时控制台。面板自身插件无法在面板内更新，需在 MCDR 控制台执行 `!!MCDR plugin install -U -y minecraft_web_manager` 后再 `!!MCDR reload plugin minecraft_web_manager` 生效；面板自身可以在面板内重载，重载后短暂中断并自动恢复
 - **假人识别**：经典 Carpet 假人按离线 UUID 精确识别；TIS/AMS/RMS 等扩展的假人可能是 Mojang 查询 UUID 或随机 UUID（v4），只能靠名称规则 + usercache 信号识别。名称规则默认只对无 usercache 记录的玩家生效，误判时可用 `not_bot_names` 或行内「取消标记」强制修正
 - **Ping 值在原版服务端下无法获取**，列表中不展示
