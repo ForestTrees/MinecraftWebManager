@@ -493,6 +493,40 @@ class WebService:
             self.publish("status", {"event": "plugin_check_update", "plugin_id": body.plugin_id, "by": user["sub"]})
             return result
 
+        @app.get("/api/plugins/self_update")
+        async def self_plugin_check_update(_: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.self_plugin_check_update, lambda line: self.publish("console", line)
+                )
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            update = next(
+                (item for item in result.get("updates", []) if item.get("plugin_id") == result["plugin_id"]),
+                None,
+            )
+            return {
+                "plugin_id": result["plugin_id"],
+                "available": update is not None and not result.get("failed", False),
+                "current": update.get("current") if update else None,
+                "latest": update.get("latest") if update else None,
+                "failed": result.get("failed", False),
+                "completed": result.get("success", False),
+            }
+
+        @app.post("/api/plugins/self_update")
+        async def self_plugin_update(user: dict[str, Any] = Depends(require_user)) -> dict[str, Any]:
+            try:
+                result = await asyncio.to_thread(
+                    self.bridge.self_plugin_update, lambda line: self.publish("console", line)
+                )
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+            self.publish("status", {"event": "self_plugin_update", "plugin_id": result["plugin_id"], "by": user["sub"]})
+            return result
+
         @app.post("/api/plugins/update")
         async def plugin_update(
             body: PluginOperationRequest, user: dict[str, Any] = Depends(require_user)

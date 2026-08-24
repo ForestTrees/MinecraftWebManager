@@ -105,7 +105,8 @@ button { cursor: pointer; }
 .btn.ghost { background: transparent; color: var(--text); border-color: var(--border-strong); }
 .btn.ghost:hover:not(:disabled) { background: var(--surface-2); border-color: var(--text-faint); }
 .btn.warn { background: var(--warn); color: #241503; }
-.btn.warn:hover:not(:disabled) { filter: brightness(1.06); }
+.btn.warn:hover:not(:disabled) { background: var(--warn); filter: brightness(1.06); }
+.btn[hidden] { display: none !important; }
 .btn.danger { background: var(--danger); color: #fff; }
 .btn.danger:hover:not(:disabled) { background: var(--danger-hover); }
 .btn.sm { padding: .4rem .7rem; font-size: .85rem; }
@@ -168,6 +169,7 @@ input.field:focus, select.field:focus {
 
 .sidebar-footer { margin-top: auto; display: grid; gap: .8rem; }
 .sidebar-footer .row { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.sidebar-footer .self-update { width: 100%; }
 
 /* ---------- main column ---------- */
 .main { display: flex; flex-direction: column; min-width: 0; }

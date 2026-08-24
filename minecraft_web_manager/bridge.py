@@ -713,6 +713,16 @@ class MCDRBridge:
             "success": not failed and _PIM_CHECK_SUCCESS_MARKER.search(text) is not None,
         }
 
+    def self_plugin_check_update(
+        self, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        """Check whether this panel plugin has an available catalogue update."""
+        plugin_id = self.call(lambda: self.server.get_self_metadata().id)
+        return {
+            "plugin_id": plugin_id,
+            **self.plugin_check_update(plugin_id, on_console_line),
+        }
+
     def _wait_for_pim_operation(self, operation_key: str) -> bool:
         """Wait for MCDR's plugin installer operation (e.g. checkupdate) to finish.
 
@@ -828,6 +838,22 @@ class MCDRBridge:
             "skipped": skipped,
             "lines": lines,
         }
+
+    def self_plugin_update(
+        self, on_console_line: Callable[[dict[str, Any]], None] | None = None
+    ) -> dict[str, Any]:
+        """Start updating this plugin, then let MCDR reload it.
+
+        Installing the running plugin tears down this web service as part of the
+        normal MCDR plugin reload.  Do not wait for the installer operation here:
+        the request may disappear while the panel is being restarted.
+        """
+        plugin_id = self.call(lambda: self.server.get_self_metadata().id)
+        self._validate_plugin_id(plugin_id)
+        result = self._plugin_command(
+            f"!!MCDR plugin install -U {plugin_id}", on_console_line
+        )
+        return {**result, "plugin_id": plugin_id, "reloading": True}
 
     def plugin_disable(
         self, plugin_id: str, on_console_line: Callable[[dict[str, Any]], None] | None = None

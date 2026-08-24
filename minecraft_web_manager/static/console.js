@@ -1,4 +1,4 @@
-const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting', mods: [], manageSubtab: 'plugins', manageBusy: false, configModal: { type: null, files: [], current: null, dirty: false }, pluginUpdates: {}, pluginChecked: new Set(), worldSubtab: 'properties' };
+const state = { socket: null, loggedOut: false, history: [], historyIndex: -1, draft: '', activeView: 'console', chartRange: '1h', chartData: null, botsExpanded: false, conn: 'connecting', mods: [], manageSubtab: 'plugins', manageBusy: false, configModal: { type: null, files: [], current: null, dirty: false }, pluginUpdates: {}, pluginChecked: new Set(), worldSubtab: 'properties', selfUpdate: null };
 const mcdrConfigState = { loaded: false, path: 'config.yml', entries: [], categories: [], dirty: new Map(), editable: false, reason: null, size: 0 };
 const $ = (id) => document.getElementById(id);
 const T = (key, params) => (window.MWMI18N ? window.MWMI18N.t(key, params) : key);
@@ -287,6 +287,52 @@ async function refreshOverview() {
     ];
   } catch (error) { console.warn(error); }
 }
+
+function renderSelfUpdate(update) {
+  state.selfUpdate = update && update.available ? update : null;
+  const button = $('self-update');
+  if (!button) return;
+  button.hidden = !state.selfUpdate;
+  button.disabled = false;
+  if (state.selfUpdate) {
+    button.textContent = T('self_update_available', {
+      current: state.selfUpdate.current,
+      latest: state.selfUpdate.latest,
+    });
+  }
+}
+
+async function checkSelfUpdate() {
+  try {
+    renderSelfUpdate(await api('/api/plugins/self_update'));
+  } catch (error) {
+    renderSelfUpdate(null);
+    console.warn(error);
+  }
+}
+
+document.addEventListener('click', async (event) => {
+  const button = event.target.closest('#self-update');
+  if (!button || !state.selfUpdate) return;
+  const update = state.selfUpdate;
+  const confirmed = await confirmDialog(
+    T('self_update_confirm', { current: update.current, latest: update.latest }),
+    { title: T('self_update_title'), confirmText: T('self_update_confirm_button') }
+  );
+  if (!confirmed) return;
+  button.disabled = true;
+  button.textContent = T('self_update_installing');
+  try {
+    await api('/api/plugins/self_update', { method: 'POST' });
+    state.selfUpdate = null;
+    button.hidden = true;
+    showToast(T('self_update_started'));
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = T('self_update_available', { current: update.current, latest: update.latest });
+    showToast(T('self_update_failed', { error: error.message }), { type: 'error' });
+  }
+});
 
 function updatePerformanceTab(data) {
   // CPU / memory / network are shown as live charts instead of cards.
@@ -1997,6 +2043,7 @@ if ($('config-modal-editor-name')) $('config-modal-editor-name').textContent = T
 refreshConnectionText();
 refreshOverview();
 refreshWorld();
+checkSelfUpdate();
 connectSocket();
 setInterval(() => {
   refreshOverview();
@@ -2019,6 +2066,7 @@ setInterval(() => {
 document.addEventListener('mwm:langchange', () => {
   $('view-title').textContent = viewTitle(state.activeView);
   refreshConnectionText();
+  if (state.selfUpdate) renderSelfUpdate(state.selfUpdate);
   refreshOverview();
   refreshWorld();
   if (state.activeView === 'players') refreshRoster();
