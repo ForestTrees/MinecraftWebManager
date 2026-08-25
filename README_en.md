@@ -6,7 +6,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serve
 
 The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
 
-- **Version**: 1.2.2
+- **Version**: 1.2.3
 - **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`, `ruamel-yaml`
 
@@ -16,7 +16,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### Live console
 
-- Server output and in-game chat streamed over WebSocket; the last 1000 lines are replayed on (re)connect
+- Server output, in-game chat, and MCDR/plugin background logs (including asynchronous worker output) are streamed over WebSocket; the last 1000 lines are replayed on (re)connect
 - Send both Minecraft commands and MCDR commands (`!!` prefix) — replies to things like `!!MCDR status` show up in the web console too
 - Choose the command channel: **console** (writes to the server's stdin) or **RCON** (returns the server's reply text)
 - `↑` / `↓` browse command history; suggestions appear as you type

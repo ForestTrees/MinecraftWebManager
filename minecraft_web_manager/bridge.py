@@ -23,6 +23,7 @@ from mcdreforged.minecraft.rtext.text import RTextBase
 from ruamel.yaml import YAML
 
 from . import nbt, pending, properties, roster
+from .console_capture import suppress_current_thread
 
 # Minecraft usernames are 1-16 of [A-Za-z0-9_]; anything else could smuggle a second
 # command (or arguments) into the console/RCON line, so targets are validated not escaped.
@@ -166,7 +167,11 @@ class WebCommandSource(PluginCommandSource):
         self._on_line = on_line
 
     def reply(self, message: Any, **kwargs: Any) -> None:
-        super().reply(message, **kwargs)
+        # The logger capture layer sees the underlying MCDR log record. Keep
+        # this explicit callback as the operation collector, but suppress the
+        # logger copy here so command replies are not shown twice.
+        with suppress_current_thread():
+            super().reply(message, **kwargs)
         timestamp = time.strftime("%H:%M:%S")
         thread_name = threading.current_thread().name
         text = RTextBase.from_any(message).to_plain_text()

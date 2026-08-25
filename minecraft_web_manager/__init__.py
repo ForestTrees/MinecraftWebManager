@@ -10,12 +10,14 @@ from typing import Any
 
 from .bridge import MCDRBridge
 from .config import ConfigStore
+from .console_capture import install as install_console_capture
+from .console_capture import uninstall as uninstall_console_capture
 from .metrics import MetricsHistory
 from .web import WebService
 
 PLUGIN_METADATA = {
     "id": "minecraft_web_manager",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "name": "Minecraft Web Manager",
     "dependencies": {"mcdreforged": ">=2.15.0"},
 }
@@ -34,12 +36,19 @@ _pending_player_meta: dict[str, dict[str, str]] = {}
 def on_load(server, prev_module) -> None:
     global _service, _history, _bridge, _players, _pending_player_meta
     if prev_module is not None:
+        if hasattr(prev_module, "uninstall_console_capture"):
+            prev_module.uninstall_console_capture()
         if getattr(prev_module, "_service", None) is not None:
             prev_module._service.stop()
         if getattr(prev_module, "_history", None) is not None:
             prev_module._history.stop()
     _players = {}
     _pending_player_meta = {}
+    # on_info covers server stdout; this second channel covers MCDR/plugin
+    # logger records emitted by background workers such as prime_backup.
+    install_console_capture(
+        lambda line: _service.publish("console", line) if _service is not None else None
+    )
     config_path = Path("config") / "minecraft_web_manager" / "config.json"
     config = ConfigStore(config_path)
     if not config.has_password():
@@ -100,6 +109,7 @@ def _seed_online_players(server) -> None:
 
 def on_unload(server) -> None:
     global _service, _history, _bridge
+    uninstall_console_capture()
     if _service is not None:
         _service.stop()
         _service = None
