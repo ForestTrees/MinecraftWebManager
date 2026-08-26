@@ -105,6 +105,11 @@ class CommandRequest(BaseModel):
     transport: str = Field(default="console", pattern="^(console|rcon)$")
 
 
+class CommandSuggestRequest(BaseModel):
+    command: str = Field(max_length=32_768)
+    cursor: int | None = Field(default=None, ge=0, le=32_768)
+
+
 class ActionRequest(BaseModel):
     action: str = Field(pattern="^(start|stop|restart)$")
 
@@ -797,6 +802,17 @@ class WebService:
                 )
             except ValueError as error:
                 raise HTTPException(status_code=400, detail=str(error)) from error
+            except Exception as error:
+                raise HTTPException(status_code=503, detail=str(error)) from error
+
+        @app.post("/api/commands/suggest")
+        async def suggest_commands(
+            body: CommandSuggestRequest, _: dict[str, Any] = Depends(require_user)
+        ) -> dict[str, Any]:
+            if body.cursor is not None and body.cursor > len(body.command):
+                raise HTTPException(status_code=400, detail="Cursor is outside the command")
+            try:
+                return await asyncio.to_thread(self.bridge.suggest_commands, body.command, body.cursor)
             except Exception as error:
                 raise HTTPException(status_code=503, detail=str(error)) from error
 

@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 import psutil
-from mcdreforged.command.command_source import PluginCommandSource
+from mcdreforged.command.command_source import ConsoleCommandSource
 from mcdreforged.constants import core_constant
 from mcdreforged.minecraft.rtext.text import RTextBase
 from ruamel.yaml import YAML
 
 from . import nbt, pending, properties, roster
+from .command_suggestions import HelpSuggestionIndex, is_help_line
 from .console_capture import suppress_current_thread
 
 # Minecraft usernames are 1-16 of [A-Za-z0-9_]; anything else could smuggle a second
@@ -155,15 +156,15 @@ _POS_PATTERN = re.compile(r"\[\s*(-?[\d.eE]+)d?\s*,\s*(-?[\d.eE]+)d?\s*,\s*(-?[\
 _DIMENSION_PATTERN = re.compile(r'"([^"]+)"')
 
 
-class WebCommandSource(PluginCommandSource):
-    """A plugin command source whose replies are forwarded to the web console instead of only the MCDR log.
+class WebCommandSource(ConsoleCommandSource):
+    """A console command source whose replies are forwarded to the web console.
 
     MCDR's default plugin command source prints command replies (e.g. the output of ``!!MCDR status``)
     straight to the MCDR logger, which never reaches ``on_info`` and therefore never reaches the web UI.
     """
 
-    def __init__(self, server_interface, on_line: Callable[[dict[str, Any]], None]):
-        super().__init__(server_interface)
+    def __init__(self, mcdr_server, info, on_line: Callable[[dict[str, Any]], None]):
+        super().__init__(mcdr_server, info)
         self._on_line = on_line
 
     def reply(self, message: Any, **kwargs: Any) -> None:
@@ -174,7 +175,9 @@ class WebCommandSource(PluginCommandSource):
             super().reply(message, **kwargs)
         timestamp = time.strftime("%H:%M:%S")
         thread_name = threading.current_thread().name
-        text = RTextBase.from_any(message).to_plain_text()
+        # Preserve the same ANSI color sequences that MCDR's native console
+        # receives. ``to_plain_text`` would silently discard styled RText.
+        text = RTextBase.from_any(message).to_colored_text()
         for line in text.splitlines() or [""]:
             self._on_line(
                 {
@@ -204,11 +207,138 @@ class MCDRBridge:
         self.pending: pending.PendingProperties | None = None
         self._instant_keys: set[str] = set()
         self._instant_lock = threading.Lock()
+        self._help_index = HelpSuggestionIndex()
+        self._help_capture_lock = threading.RLock()
+        self._help_capture_lines: list[str] = []
+        self._help_capture_active = False
+        self._help_capture_timer: threading.Timer | None = None
 
     def call(self, operation: Callable[[], Any], timeout: float = 5.0) -> Any:
         """Run an operation on MCDR's TaskExecutor and wait from the web thread."""
         future = self.server.schedule_task(operation, block=False)
         return future.result(timeout=timeout)
+
+    def suggest_commands(self, command: str, cursor: int | None = None) -> dict[str, Any]:
+        """Suggest either MCDR commands or server/mod commands for the web console.
+
+        MCDR's own command manager is authoritative for ``!!`` commands. Plain
+        commands use the latest server ``help`` snapshot, which is deliberately
+        kept separate because Minecraft commands are owned by the server rather
+        than by MCDR.
+        """
+        if cursor is not None:
+            command = command[:cursor]
+        if command.startswith("!!"):
+            return self._suggest_mcdr_commands(command)
+        return {
+            "items": self._help_index.suggest(command),
+            "complete_hint": None,
+            "source": "server_help",
+            "available": self._help_index.available,
+        }
+
+    def _suggest_mcdr_commands(self, command: str) -> dict[str, Any]:
+        def suggest() -> dict[str, Any]:
+            # Keep this import lazy: the bridge is also imported by lightweight
+            # tooling that may inspect the plugin without a complete MCDR install.
+            from mcdreforged.executor.console_handler import ConsoleSuggestionCommandSource
+
+            # ``self.server`` is PluginServerInterface. The command manager and
+            # handler manager belong to the underlying MCDReforgedServer, and
+            # must both be read on the TaskExecutor thread.
+            mcdr_server = self.server._mcdr_server
+            info = mcdr_server.server_handler_manager.get_current_handler().parse_console_command(command)
+            source = ConsoleSuggestionCommandSource(mcdr_server, info)
+            # MCDR's console completer uses this protected finalization hook too;
+            # it attaches the parsed command source before plugin callbacks run.
+            info._attach_and_finalize(mcdr_server, command_source=source)
+            suggestions = mcdr_server.command_manager.suggest_command(command, source)
+            current_prefix = "" if command.endswith((" ", "\t")) else (command.split()[-1] if command.split() else "")
+            items: list[dict[str, str]] = []
+            seen: set[tuple[str, str]] = set()
+            for suggestion in suggestions:
+                insert = str(suggestion.command)
+                display = str(suggestion.suggest_input).strip()
+                if not display:
+                    continue
+                if current_prefix and not display.lower().startswith(current_prefix.lower()):
+                    continue
+                key = (display, insert)
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append({"display": display, "insert": insert, "kind": "literal"})
+                if len(items) >= 80:
+                    break
+            return {
+                "items": items,
+                "complete_hint": suggestions.complete_hint,
+                "source": "mcdr",
+                "available": True,
+            }
+
+        return self.call(suggest, timeout=5.0)
+
+    def refresh_server_help(self) -> bool:
+        """Ask the running server for help and replace the parsed index shortly after."""
+        def request() -> bool:
+            if not self.server.is_server_running():
+                return False
+            self._begin_help_capture()
+            self.server.execute("help")
+            return True
+
+        return bool(self.call(request, timeout=5.0))
+
+    def _begin_help_capture(self) -> None:
+        with self._help_capture_lock:
+            if self._help_capture_timer is not None:
+                self._help_capture_timer.cancel()
+            self._help_capture_lines = []
+            self._help_capture_active = True
+            # ``help`` is emitted as many individual lines. Keep one daemon
+            # timer for the whole snapshot instead of creating one thread per
+            # line; normal server output completes well within this window.
+            self._arm_help_capture_timer(2.0)
+
+    def record_help_line(self, content: str) -> bool:
+        """Capture an internal help line and report whether web output should hide it."""
+        if not is_help_line(content):
+            return False
+        with self._help_capture_lock:
+            if not self._help_capture_active:
+                return False
+            self._help_capture_lines.append(content)
+            return True
+
+    def _arm_help_capture_timer(self, delay: float) -> None:
+        timer = threading.Timer(delay, self._finish_help_capture)
+        timer.daemon = True
+        self._help_capture_timer = timer
+        timer.start()
+
+    def _finish_help_capture(self) -> None:
+        with self._help_capture_lock:
+            if not self._help_capture_active:
+                return
+            lines = list(self._help_capture_lines)
+            self._help_capture_active = False
+            self._help_capture_timer = None
+        if lines:
+            self._help_index.replace(lines)
+
+    def stop_help_capture(self) -> None:
+        """Cancel a pending help snapshot during plugin unload/reload."""
+        with self._help_capture_lock:
+            if self._help_capture_timer is not None:
+                self._help_capture_timer.cancel()
+                self._help_capture_timer = None
+            self._help_capture_active = False
+
+    def clear_server_help(self) -> None:
+        """Discard commands from a stopped server until the next startup snapshot."""
+        self.stop_help_capture()
+        self._help_index.replace([])
 
     def status(self) -> dict[str, Any]:
         def get_status() -> dict[str, Any]:
@@ -515,8 +645,15 @@ class MCDRBridge:
             if transport != "console":
                 raise ValueError("Unsupported command transport")
             if command.startswith("!!"):
-                source = WebCommandSource(self.server, on_console_line or (lambda _line: None))
-                self.server.execute_command(command, source=source)
+                mcdr_server = self.server._mcdr_server
+                info = mcdr_server.server_handler_manager.get_current_handler().parse_console_command(command)
+                source = WebCommandSource(mcdr_server, info, on_console_line or (lambda _line: None))
+                # Feed the command through MCDR's normal info-reactor pipeline.
+                # Registered MCDR commands are consumed by CommandManager; an
+                # unregistered ``!!`` command continues to the Minecraft server,
+                # matching the behavior of the native MCDR console.
+                info._attach_and_finalize(mcdr_server, command_source=source)
+                mcdr_server.reactor_manager.put_info(info)
             else:
                 self.server.execute(command)
             return None

@@ -15,7 +15,6 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 from mcdreforged.logging.logger import MCDReforgedLogger
-from mcdreforged.utils.string_utils import clean_console_color_code
 
 
 _capture_state = threading.local()
@@ -50,7 +49,10 @@ def _format_record(logger: MCDReforgedLogger, record: Any) -> str:
     except Exception:
         timestamp = time.strftime("%H:%M:%S", time.localtime(record.created))
         formatted = f"[MCDR] [{timestamp}] [{record.threadName}/{record.levelname}]: {record.getMessage()}"
-    return clean_console_color_code(str(formatted))
+    # Keep MCDR's ANSI SGR sequences. The native console uses them for the
+    # level label and colored message text; the web console converts them to
+    # safe HTML spans on the browser side.
+    return str(formatted)
 
 
 def _capture(logger: MCDReforgedLogger, record: Any) -> None:
@@ -59,7 +61,10 @@ def _capture(logger: MCDReforgedLogger, record: Any) -> None:
         return
     try:
         raw = _format_record(logger, record)
-        content = clean_console_color_code(str(record.getMessage()))
+        # Keep both Minecraft ``§`` codes and ANSI codes in the plain payload.
+        # ``raw`` is normally the fully formatted logger line, while ``content``
+        # is useful to callers that do not want the logger prefix.
+        content = str(record.getMessage())
         publisher(
             {
                 "content": content,

@@ -97,18 +97,7 @@ const PROPERTY_OPTIONS = {
   'region-file-compression': ['deflate', 'lz4', 'none'],
 };
 
-const BASE_COMMAND_SUGGESTIONS = [
-  '!!MCDR status', '!!MCDR reload plugin', '!!MCDR reload config', '!!MCDR reload permission', '!!MCDR reload all',
-  '!!MCDR permission list', '!!MCDR permission set ', '!!MCDR plugin list', '!!MCDR plugin reload ', '!!MCDR check_update',
-  '!!help',
-  'list', 'say ', 'stop', 'whitelist add ', 'whitelist remove ', 'whitelist list', 'op ', 'deop ',
-  'gamemode survival ', 'gamemode creative ', 'gamemode adventure ', 'gamemode spectator ',
-  'time set day', 'time set night', 'weather clear', 'weather rain',
-  'difficulty peaceful', 'difficulty easy', 'difficulty normal', 'difficulty hard',
-  'kick ', 'ban ', 'pardon ', 'tp ', 'give ', 'save-all',
-];
-let commandSuggestionPool = [...BASE_COMMAND_SUGGESTIONS];
-const suggestionState = { items: [], activeIndex: -1 };
+const suggestionState = { items: [], activeIndex: -1, requestId: 0, timer: null };
 
 const actionButtons = {
   start: document.querySelector('[data-action="start"]'),
@@ -154,31 +143,95 @@ const MC_COLORS = {
   '8': '#555555', '9': '#5555FF', a: '#55FF55', b: '#55FFFF',
   c: '#FF5555', d: '#FF55FF', e: '#FFFF55', f: '#FFFFFF',
 };
+const ANSI_COLORS = {
+  30: '#000000', 31: '#AA0000', 32: '#00AA00', 33: '#AA5500',
+  34: '#0000AA', 35: '#AA00AA', 36: '#00AAAA', 37: '#AAAAAA',
+  90: '#555555', 91: '#FF5555', 92: '#55FF55', 93: '#FFFF55',
+  94: '#5555FF', 95: '#FF55FF', 96: '#55FFFF', 97: '#FFFFFF',
+};
+function ansi256Color(index) {
+  if (index < 16) return Object.values(ANSI_COLORS)[index] || null;
+  if (index >= 232) {
+    const value = 8 + (index - 232) * 10;
+    return `rgb(${value},${value},${value})`;
+  }
+  const cube = index - 16;
+  const r = Math.floor(cube / 36), g = Math.floor((cube % 36) / 6), b = cube % 6;
+  const channel = (value) => value === 0 ? 0 : 55 + value * 40;
+  return `rgb(${channel(r)},${channel(g)},${channel(b)})`;
+}
+function resetTextStyle(style) {
+  style.color = null;
+  style.background = null;
+  style.bold = false;
+  style.italic = false;
+  style.underline = false;
+  style.strikethrough = false;
+}
+function applyAnsiCodes(style, rawCodes) {
+  const codes = rawCodes ? rawCodes.split(';').filter(Boolean).map(Number) : [0];
+  if (!codes.length) codes.push(0);
+  for (let index = 0; index < codes.length; index += 1) {
+    const code = codes[index];
+    if (code === 0) resetTextStyle(style);
+    else if (code === 1) style.bold = true;
+    else if (code === 22) style.bold = false;
+    else if (code === 3) style.italic = true;
+    else if (code === 23) style.italic = false;
+    else if (code === 4) style.underline = true;
+    else if (code === 24) style.underline = false;
+    else if (code === 9) style.strikethrough = true;
+    else if (code === 29) style.strikethrough = false;
+    else if (ANSI_COLORS[code]) style.color = ANSI_COLORS[code];
+    else if (code === 39) style.color = null;
+    else if (code === 38 && codes[index + 1] === 5 && codes[index + 2] != null) {
+      style.color = ansi256Color(codes[index + 2]);
+      index += 2;
+    } else if (code === 38 && codes[index + 1] === 2 && codes[index + 4] != null) {
+      style.color = `rgb(${codes[index + 2]},${codes[index + 3]},${codes[index + 4]})`;
+      index += 4;
+    } else if (code === 49) style.background = null;
+    else if (code === 40 || (code >= 100 && code <= 107)) style.background = ANSI_COLORS[code === 40 ? 30 : code - 70] || null;
+    else if (code >= 40 && code <= 47) style.background = ANSI_COLORS[code - 10] || null;
+  }
+}
 function formatMinecraftText(text) {
-  const segments = String(text).split(/§([0-9a-fk-or])/i);
+  const source = String(text);
+  const tokenPattern = /§([0-9a-fk-or])|\x1b\[([0-9;]*)m/gi;
+  const style = { color: null, background: null, bold: false, italic: false, underline: false, strikethrough: false };
   let html = '';
-  let open = false;
-  let style = {};
-  const close = () => { if (open) { html += '</span>'; open = false; } };
-  segments.forEach((segment, index) => {
-    if (index % 2 === 0) { html += escapeHtml(segment); return; }
-    close();
-    const code = segment.toLowerCase();
-    if (code === 'r') style = {};
-    else if (code === 'l') style = { ...style, bold: true };
-    else if (code === 'o') style = { ...style, italic: true };
-    else if (code === 'n') style = { ...style, underline: true };
-    else if (code === 'm') style = { ...style, strikethrough: true };
-    else if (MC_COLORS[code]) style = { color: MC_COLORS[code] };
+  let cursor = 0;
+  const append = (value) => {
+    if (!value) return;
     const declarations = [];
     if (style.color) declarations.push(`color:${style.color}`);
+    if (style.background) declarations.push(`background-color:${style.background}`);
     if (style.bold) declarations.push('font-weight:700');
     if (style.italic) declarations.push('font-style:italic');
     const decorations = [style.underline && 'underline', style.strikethrough && 'line-through'].filter(Boolean);
     if (decorations.length) declarations.push(`text-decoration:${decorations.join(' ')}`);
-    if (declarations.length) { html += `<span style="${declarations.join(';')}">`; open = true; }
-  });
-  close();
+    html += declarations.length
+      ? `<span style="${declarations.join(';')}">${escapeHtml(value)}</span>`
+      : escapeHtml(value);
+  };
+  let match;
+  while ((match = tokenPattern.exec(source)) !== null) {
+    append(source.slice(cursor, match.index));
+    if (match[1]) {
+      const code = match[1].toLowerCase();
+      if (MC_COLORS[code]) style.color = MC_COLORS[code];
+      else if (code === 'r') resetTextStyle(style);
+      else if (code === 'k') { /* obfuscated text is not reproducible in HTML */ }
+      else if (code === 'l') style.bold = true;
+      else if (code === 'o') style.italic = true;
+      else if (code === 'n') style.underline = true;
+      else if (code === 'm') style.strikethrough = true;
+    } else {
+      applyAnsiCodes(style, match[2]);
+    }
+    cursor = tokenPattern.lastIndex;
+  }
+  append(source.slice(cursor));
   return html;
 }
 
@@ -281,10 +334,6 @@ async function refreshOverview() {
     updateOverviewMetrics(await api('/api/performance'));
     const { plugins } = await api('/api/plugins');
     renderPlugins(plugins);
-    commandSuggestionPool = [
-      ...BASE_COMMAND_SUGGESTIONS,
-      ...plugins.filter((p) => p.state === 'loaded' && p.id).map((p) => `!!MCDR plugin reload ${p.id}`),
-    ];
   } catch (error) { console.warn(error); }
 }
 
@@ -1950,14 +1999,18 @@ $('logout').addEventListener('click', logout);
 
 /* ---------- command suggestions (only after typing; never steal history keys) ---------- */
 function renderSuggestions(items) {
-  suggestionState.items = items;
+  suggestionState.items = Array.isArray(items) ? items.filter((item) => item && item.display && item.insert) : [];
   suggestionState.activeIndex = -1;
   const list = $('command-suggestions');
-  if (!items.length) { list.hidden = true; list.innerHTML = ''; return; }
-  list.innerHTML = items.map((value, index) => `<li data-index="${index}">${escapeHtml(value)}</li>`).join('');
+  if (!suggestionState.items.length) { list.hidden = true; list.innerHTML = ''; return; }
+  list.innerHTML = suggestionState.items.map((item, index) => `
+    <li data-index="${index}" data-kind="${escapeHtml(item.kind || 'literal')}">${escapeHtml(item.display)}</li>
+  `).join('');
   list.hidden = false;
 }
 function hideSuggestions() {
+  suggestionState.requestId += 1;
+  if (suggestionState.timer) { clearTimeout(suggestionState.timer); suggestionState.timer = null; }
   suggestionState.items = [];
   suggestionState.activeIndex = -1;
   $('command-suggestions').hidden = true;
@@ -1966,18 +2019,39 @@ function highlightSuggestion(index) {
   [...$('command-suggestions').children].forEach((el, i) => el.classList.toggle('active', i === index));
   suggestionState.activeIndex = index;
 }
+function applySuggestion(item) {
+  if (!item) return;
+  $('command').value = item.insert;
+  hideSuggestions();
+  $('command').focus();
+}
+function fetchSuggestions(value) {
+  if (!value.trim()) { hideSuggestions(); return; }
+  if (suggestionState.timer) clearTimeout(suggestionState.timer);
+  const requestId = ++suggestionState.requestId;
+  suggestionState.timer = setTimeout(async () => {
+    suggestionState.timer = null;
+    try {
+      const response = await api('/api/commands/suggest', {
+        method: 'POST',
+        body: JSON.stringify({ command: value, cursor: value.length }),
+      });
+      if (requestId !== suggestionState.requestId || $('command').value !== value) return;
+      renderSuggestions(response.items || []);
+    } catch (error) {
+      if (requestId === suggestionState.requestId) console.debug('Command suggestion unavailable', error);
+    }
+  }, 140);
+}
 $('command').addEventListener('input', () => {
-  const value = $('command').value.trim().toLowerCase();
-  if (!value) { hideSuggestions(); return; }
-  renderSuggestions(commandSuggestionPool.filter((item) => item.toLowerCase().includes(value)).slice(0, 8));
+  hideSuggestions();
+  fetchSuggestions($('command').value);
 });
 $('command-suggestions').addEventListener('mousedown', (event) => {
   const item = event.target.closest('li');
   if (!item) return;
   event.preventDefault();
-  $('command').value = suggestionState.items[Number(item.dataset.index)];
-  hideSuggestions();
-  $('command').focus();
+  applySuggestion(suggestionState.items[Number(item.dataset.index)]);
 });
 $('command').addEventListener('blur', () => setTimeout(hideSuggestions, 150));
 
@@ -2007,8 +2081,7 @@ $('command').addEventListener('keydown', (event) => {
   }
   if (hasSuggestions && event.key === 'Enter' && suggestionState.activeIndex >= 0) {
     event.preventDefault();
-    $('command').value = suggestionState.items[suggestionState.activeIndex];
-    hideSuggestions();
+    applySuggestion(suggestionState.items[suggestionState.activeIndex]);
     return;
   }
   if (hasSuggestions && event.key === 'Escape') { hideSuggestions(); return; }

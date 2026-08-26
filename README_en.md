@@ -19,7 +19,7 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 - Server output, in-game chat, and MCDR/plugin background logs (including asynchronous worker output) are streamed over WebSocket; the last 1000 lines are replayed on (re)connect
 - Send both Minecraft commands and MCDR commands (`!!` prefix) — replies to things like `!!MCDR status` show up in the web console too
 - Choose the command channel: **console** (writes to the server's stdin) or **RCON** (returns the server's reply text)
-- `↑` / `↓` browse command history; suggestions appear as you type
+- `↑` / `↓` browse command history. `!!` MCDR commands use MCDR's native command tree; Minecraft / mod commands are indexed from one `help` run after plugin load and server startup. Suggestions are fetched for the current word as you type, with `↑` / `↓` / `Enter` / `Esc` keyboard controls
 - One-click start / stop / restart of the server
 - Always-visible overview strip: run state, player count, TPS/MSPT, uptime, Minecraft and MCDR versions, world name and seed
 

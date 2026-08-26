@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -38,6 +39,8 @@ def on_load(server, prev_module) -> None:
     if prev_module is not None:
         if hasattr(prev_module, "uninstall_console_capture"):
             prev_module.uninstall_console_capture()
+        if getattr(prev_module, "_bridge", None) is not None:
+            prev_module._bridge.stop_help_capture()
         if getattr(prev_module, "_service", None) is not None:
             prev_module._service.stop()
         if getattr(prev_module, "_history", None) is not None:
@@ -81,6 +84,26 @@ def on_load(server, prev_module) -> None:
         raise
     server.logger.info("Minecraft Web Manager is listening on http://%s:%s", config.data["host"], config.data["port"])
     _seed_online_players(server)
+    _refresh_server_help_async()
+
+
+def _refresh_server_help_async() -> None:
+    """Refresh the server/mod command index without blocking an MCDR callback."""
+    bridge = _bridge
+    if bridge is None:
+        return
+
+    def refresh() -> None:
+        try:
+            bridge.refresh_server_help()
+        except Exception as error:
+            # Help is an enhancement; a server that is still starting or has no
+            # compatible handler must not make the web panel fail to load.
+            if _service is not None:
+                _service.logger.debug("Could not refresh server command suggestions: %s", error)
+
+    worker = threading.Thread(target=refresh, name="Minecraft Web Manager help", daemon=True)
+    worker.start()
 
 
 def _seed_online_players(server) -> None:
@@ -109,6 +132,8 @@ def _seed_online_players(server) -> None:
 
 def on_unload(server) -> None:
     global _service, _history, _bridge
+    if _bridge is not None:
+        _bridge.stop_help_capture()
     uninstall_console_capture()
     if _service is not None:
         _service.stop()
@@ -121,8 +146,11 @@ def on_unload(server) -> None:
 
 def on_info(server, info) -> None:
     content = str(info.content) if info.content is not None else str(getattr(info, "raw_content", ""))
+    hide_internal_help_line = False
     # UUID / login lines are plain server output; capture IP+UUID for the next join event.
     if not info.is_user:
+        if _bridge is not None and not info.is_player:
+            hide_internal_help_line = _bridge.record_help_line(content)
         uuid_match = _UUID_PATTERN.match(content)
         if uuid_match:
             name, player_uuid = uuid_match.groups()
@@ -139,6 +167,11 @@ def on_info(server, info) -> None:
     # MCDR's own console input — our web commands are echoed by the API layer instead,
     # so forwarding console input too would double them up.
     if info.is_from_console:
+        return
+    # The help snapshot requested by the plugin is used only to build command
+    # suggestions. Keep its many command lines out of the web console while
+    # preserving normal server output and manually-issued ``help`` commands.
+    if hide_internal_help_line:
         return
     timestamp = ":".join(f"{value:02d}" for value in (info.hour or 0, info.min or 0, info.sec or 0))
     raw_content = str(getattr(info, "raw_content", info.content))
@@ -180,10 +213,13 @@ def on_server_startup(server) -> None:
         _bridge.mark_server_started()
     if _service is not None:
         _service.publish("status", {"event": "server_startup"})
+    _refresh_server_help_async()
 
 
 def on_server_stop(server, server_return_code: int) -> None:
     _players.clear()
     _pending_player_meta.clear()
+    if _bridge is not None:
+        _bridge.clear_server_help()
     if _service is not None:
         _service.publish("status", {"event": "server_stop", "return_code": server_return_code})
