@@ -2,12 +2,12 @@
 
 **English** | [中文](README.md)
 
-An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that serves a password-protected web dashboard for your Minecraft server: a live console, player management, online plugin and mod management, online editors for `server.properties` and MCDR's `config.yml`, mod-config editing and resource usage charts.
+An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that provides a login-protected web management panel for Minecraft servers: live console, player management, online plugin and mod management, online editing for `server.properties` and MCDR's `config.yml`, mod configuration editing, and resource usage charts.
 
-The dashboard is hosted by the plugin itself — no separate web server, no CDN, no frontend build step.
+The panel is hosted by the plugin itself. No separate web server, CDN, or frontend build tool is required.
 
 - **Version**: 1.2.3
-- **Requires**: MCDReforged `>=2.15.0`, Python 3.10+
+- **Dependencies**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`, `ruamel-yaml`
 
 ---
@@ -16,71 +16,70 @@ The dashboard is hosted by the plugin itself — no separate web server, no CDN,
 
 ### Live console
 
-- Server output, in-game chat, and MCDR/plugin background logs (including asynchronous worker output) are streamed over WebSocket; the last 1000 lines are replayed on (re)connect
-- Send both Minecraft commands and MCDR commands (`!!` prefix) — replies to things like `!!MCDR status` show up in the web console too
-- Choose the command channel: **console** (writes to the server's stdin) or **RCON** (returns the server's reply text)
-- `↑` / `↓` browse command history. `!!` MCDR commands use MCDR's native command tree; Minecraft / mod commands are indexed from one `help` run after plugin load and server startup. Suggestions are fetched for the current word as you type, with `↑` / `↓` / `Enter` / `Esc` keyboard controls
-- One-click start / stop / restart of the server
-- Always-visible overview strip: run state, player count, TPS/MSPT, uptime, Minecraft and MCDR versions, world name and seed
+- Streams the latest 1,000 lines of server log output in real time
+- Supports Minecraft commands and MCDR commands (starting with `!!`)
+- Switches between **console** (writes to the server's standard input) and **RCON** (returns the server's reply text)
+- The input field supports `↑` / `↓` command history browsing and command suggestions
+- One-click server start / stop / restart
 
 ![Live console](docs/img/实时控制台.png)
 
 ### Player management
 
-- **Roster**: every player that has ever joined, merged from `usercache.json`, `ops.json`, `whitelist.json`, the ban lists and player save files — showing online state, IP, session length, last seen, dimension, coordinates and UUID. Online players and operators are pinned to the top. Detected Carpet fake players (bots) live in a separate "Bot management" table inside the same tab, collapsible and manually flaggable per row; the bot table is trimmed to player, status, session, last seen, dimension, position, UUID and actions (no IP/tags columns)
-- Per-player actions: op / deop, kick, ban, ban IP, add to / remove from whitelist
-- **Whitelist**: toggle enforcement, reload the list, add and remove entries
-- **Operators**: view, grant and revoke OP
-- **Bans**: ban and pardon players and IPs, with an optional reason
+- **Player list**: aggregates every player who has joined the server, showing online state, IP, session duration, last seen time, dimension, position, UUID, and other information
+- **Bot list**: detected Carpet fake players (bots) are shown in a collapsible list and can be manually marked or unmarked inline
+- **Per-player actions**: grant / revoke OP, kick, ban, ban IP, add to / remove from the whitelist
+- **Whitelist**: toggle the whitelist, reload it, and add or remove members
+- **Operators**: view and add or remove OPs
+- **Bans**: ban or pardon players and IPs, with an optional reason
 
-![Player roster](docs/img/玩家管理-玩家列表.png)
+![Player management](docs/img/玩家管理.png)
 
-### Plugins & Mods
-
-Plugins and mods share one tab, switched with two in-page sub-tabs: Plugins / Mods. Clicking the per-row "Config" button opens an animated modal where config files are edited.
+### Plugin and mod management
 
 **Plugins**
 
-- **Plugin list**: shows loaded, disabled and not-loaded plugins with their file states; loaded plugins can be disabled, disabled plugins can be enabled, and not-loaded plugins (e.g. those that failed to load at startup) can be loaded back with one click
-- **Check updates / Update**: uses the official MCDR plugin catalogue commands `!!MCDR plugin checkupdate` / `!!MCDR plugin install -U -y`. Results are shown as top-right toast notifications, plugins with updates are highlighted in yellow with the version change, plugins without updates no longer show the "Update" button, and a one-click "check all" is available. The outcome follows MCDR's actual output: success reports "Plugin updated", failures and timeouts say so explicitly and point to the live console; the panel itself is excluded from "update all", but checks itself whenever the panel opens and shows an update button in the sidebar footer when a new version is available
-- **Disable / Enable**: calls `!!MCDR plugin disable / enable`; plugins are renamed to `.disabled` and restored per MCDR conventions. "Disable / Delete" are tucked into a per-row "⋯" menu so destructive actions never sit next to everyday ones
-- **Config files**: browse and edit files under each plugin's `config/<plugin_id>/` folder in a modal; saving preserves the original encoding (UTF-8 / Latin-1), BOM and line endings. Binary files and files over 1 MiB are read-only, and `.DS_Store` files are filtered out
-- **Delete**: MCDR has no delete command, so the panel unloads a loaded plugin through MCDR first, then removes the plugin file; disabled / not-loaded files can be removed directly
-- Minecraft Web Manager itself cannot be disabled or deleted from the plugin list and is excluded from "update all". When an update is found, click the sidebar-footer prompt and confirm to run `!!MCDR plugin install -U minecraft_web_manager`; the panel briefly goes offline and reloads automatically. **Reloading it is allowed** — the page's WebSocket reconnects on its own
-- Management buttons are disabled while a plugin operation is in flight to prevent duplicate triggers; a rejected update check (e.g. another install task running) is never reported as "all up to date"
+- **Plugin list**: shows all MCDR plugins installed on the server; supports checking for updates, disabling, deleting, enabling, and reloading plugins
+- **Plugin configuration**: edit plugin configuration files online; binary files and files larger than 1 MiB are read-only
+- Related buttons are disabled while a plugin operation is running to prevent duplicate actions. A rejected update check (for example, because another install task is already running) is not incorrectly reported as “all plugins are up to date”
+
+![Plugin management](docs/img/插件管理.png)
 
 **Mods**
 
-- **Mod files**: upload `.jar` files into the server's `mods/` folder (an existing file name asks for confirmation before overwriting); enable / disable by renaming `foo.jar` ↔ `foo.jar.disabled`; deleting permanently removes the file. Uploads, enable/disable and deletes only take effect after a **server restart**
-- **Config files**: browse every file under the server's `config/` directory in a modal, open one and edit it, then save. The original encoding (UTF-8 / Latin-1), BOM and line endings are preserved. Binary files and files over 1 MiB are read-only, and `.DS_Store` files are filtered out. Clicking "Config" on a mod pre-fills the filter with that mod's id / name so its own files come up first instead of the whole directory
-### Server Settings
+- **Mod files**: shows all mods on the server and supports uploading, disabling, deleting, and configuring each mod. Upload, disable, and delete operations require a **server restart** to take effect
+- **Configuration files**: edit mod configuration files online; binary files and files larger than 1 MiB are read-only
 
-The top of the Server Settings page switches between two sub-tabs: **Server settings** and **MCDR config**.
+![Mod management](docs/img/mod管理.png)
 
-- **Server settings**: view and edit `server.properties` in the browser; the current file is shown next to the title in a monospace label. Settings render as a responsive card grid with localized labels, enumerated settings (difficulty, gamemode, …) appear as dropdowns, the list is filterable, and the toolbar shows the total and modified counts; saving rewrites only the keys you changed, comments and ordering are preserved, and modified cards are highlighted. Changes saved but not yet applied are marked "pending restart" with the original and new values (sensitive keys only show a "changed" hint, never the value); tracking survives plugin reloads and manual config edits, and clears automatically once the server restarts
-- **MCDR config**: on plugin load the panel inspects the running MCDR version's `config.yml` and renders visual cards grouped into Basic / Server / Plugin / Misc / Advanced / Debug, with dedicated controls for booleans, numbers and enums. Start command, RCON address, working directory, encoding, decoding and plugin directories use single-line inputs; list-typed fields (such as plugin directories or command arrays) are comma-separated in the input. Only keys that actually exist in the current MCDR version are shown, so the schema stays compatible across MCDR releases; unknown keys added by newer versions appear as generic inputs. The RCON password is never echoed and an empty submission keeps it unchanged. Saving automatically runs `!!MCDR reload config` so changes take effect immediately
+### Server configuration
 
-![Server settings](docs/img/world.png)
+The top of the server configuration page switches between the **Server configuration** and **MCDR configuration** sub-tabs.
+
+- **Server configuration**: view and edit `server.properties` online; changes take effect after the server is restarted
+- **MCDR configuration**: view and edit MCDR's `config.yml` online; saving automatically runs `!!MCDR reload config` so changes take effect immediately
+
+![Server configuration](docs/img/服务器配置.png)
 
 ### Server status
 
-- TPS, MSPT, swap, disk and system load at a glance
-- Line charts for CPU usage, memory usage and live network throughput, over 10m / 30m / 1h / 6h / 12h / 1d / 3d / 7d
-- Whole-host and Minecraft-process series are plotted separately. Samples are kept at 1-second resolution for the last hour and as 1-minute averages for the last 7 days
+- Overview of TPS, MSPT, swap, disk, and system load
+- Line charts for CPU usage, memory usage, and live network speed, with ranges of 10m / 30m / 1h / 6h / 12h / 1d / 3d / 7d
+- Separate curves for the whole host and the Minecraft process; 1-second samples are retained for the latest hour, and 1-minute averages for the latest seven days
 
 ![Server status](docs/img/服务器状态.png)
 
 ### Other
 
-- Light / dark / follow-system themes, remembered across visits
-- UI language follows the browser automatically (Simplified / Traditional Chinese → Chinese, anything else → English), with a manual switcher on both pages that is remembered
-- Responsive layout that works on a phone browser
+- Light, dark, and follow-system themes, remembered automatically
+- The interface language follows the browser automatically (Simplified / Traditional Chinese → Chinese, anything else → English); it can also be switched and remembered manually from the top-right corner / sidebar
+- Responsive layout suitable for mobile browsers
 
 ---
 
 ## Installation
 
-### 1. One-command install
+### 1. One-command installation
 
 ```
 !!MCDR plugin install minecraft_web_manager
@@ -88,84 +87,96 @@ The top of the Server Settings page switches between two sub-tabs: **Server sett
 
 ### 2. Plugin management
 
-See the official MCDReforged documentation: https://docs.mcdreforged.com/en/latest/command/mcdr.html#plugin-management
+See the [official MCDReforged documentation](https://docs.mcdreforged.com/en/latest/command/mcdr.html#plugin-management).
 
-### 3. Grab the bootstrap password
+### 3. Get the initial password
 
-On first load the plugin generates a one-time password and prints it to the MCDR log at `WARNING` level:
+On first load, the plugin generates a one-time password and prints it to the MCDR log at `WARNING` level:
 
 ```
 [Minecraft Web Manager] Minecraft Web Manager bootstrap password: xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-**Save it right away** — this is the only time it appears in plain text. Then open:
+**Save this password immediately** — it appears in plain text only once. Then open the following address in a browser:
 
 ```
 http://127.0.0.1:8088
 ```
 
-The default username is `admin`; the password is the string above.
+The default username is `admin`; the password is the string shown above.
 
-### 4. Forgot the password
+### 4. Forgot the password?
 
-Set both `password.salt` and `password.hash` to empty strings:
+Set both `password.salt` and `password.hash` in the configuration file to empty strings:
 
 ```json
 "password": { "salt": "", "hash": "" }
 ```
 
-Save, then run `!!MCDR reload plugin minecraft_web_manager` — a fresh one-time password is printed to the MCDR log again.
+Save the file and run `!!MCDR reload plugin minecraft_web_manager`. A new one-time password will be printed to the MCDR log.
 
 ---
 
+## How to update
+
+### Method 1: MCDR command
+
+```
+!!MCDR plugin install -U minecraft_web_manager
+```
+
+### Method 2: Panel update prompt
+
+Click the prompt and confirm. The latest plugin version and its related dependencies will be downloaded automatically, and the plugin will reload automatically.
+
+![Update prompt](docs/img/更新提示.png)
+
 ## Configuration
 
-The config file lives at `config/minecraft_web_manager/config.json` inside MCDR's working directory. **Reload the plugin for changes to take effect.**
+The configuration file is located at `config/minecraft_web_manager/config.json` in MCDR's working directory. **Reload the plugin after changing it for the changes to take effect.**
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `host` | `127.0.0.1` | Listen address. Local-only by default; set `0.0.0.0` to reach it from other machines |
-| `port` | `8088` | Listen port |
+| `host` | `127.0.0.1` | Panel listen address. Local-only by default; set it to `0.0.0.0` to access the panel from other machines |
+| `port` | `8088` | Panel listen port |
 | `username` | `admin` | Login username |
-| `password.salt` / `password.hash` | generated | PBKDF2 salt and hash. The password itself is never stored |
-| `token_secret` | generated | Signing key for login tokens. Clearing it invalidates every active session immediately |
-| `token_ttl_seconds` | `2592000` (30 days) | Login session lifetime in seconds; sessions slide forward while actively used |
-| `panel_title` | `MC Web Manager` | Panel brand title shown in the sidebar and browser tab (the login page title follows) |
-| `bot_names` | `[]` | Player names manually flagged as fake players (lowercase); manual fallback on top of auto-detection |
-| `not_bot_names` | `[]` | Reverse list (lowercase): forced to be treated as real players even if name rules or the offline UUID match; the per-row "unmark" button writes here |
-| `bot_name_patterns` | `["(?i)^bot[_-]"]` | Regex list for bot-like names; by default only applies to players **absent from usercache**, so a real player named `bot_XXX` is not misclassified |
-| `bot_name_patterns_apply_to_all` | `false` | Set to `true` to apply name rules to every player (for servers whose fake players do land in usercache); real players with matching names belong in `not_bot_names` |
-
-After login the browser receives an **HttpOnly + SameSite=Strict session cookie** (invisible to page scripts and never sent on cross-site requests), valid for 30 days by default. Active use keeps sliding the expiry forward, so normal usage does not require repeated logins. The "log out" button ends the session immediately; clearing `token_secret` also invalidates every session at once.
+| `password.salt` / `password.hash` | generated automatically | PBKDF2 salt and password hash; the password itself is never stored |
+| `token_secret` | generated automatically | Signing key for login tokens; clearing it immediately invalidates all logged-in sessions |
+| `token_ttl_seconds` | `2592000` (30 days) | Login session lifetime in seconds; active sessions are automatically renewed before expiry |
+| `panel_title` | `MC Web Manager` | Panel brand title shown in the sidebar and browser tab; the login page title follows it |
+| `bot_names` | `[]` | Player names manually marked as bots (lowercase); manual fallback for automatic detection |
+| `not_bot_names` | `[]` | Reverse list (lowercase): forces a player to be treated as real even if the name rule or offline UUID matches; the inline “unmark” action writes here |
+| `bot_name_patterns` | `["(?i)^bot[_-]"]` | Regex list for bot names; by default applies only to players **not present in usercache**, avoiding false positives for real players with similar names |
+| `bot_name_patterns_apply_to_all` | `false` | Set to `true` to apply name rules to every player (for servers where fake players are also written to usercache); add real players with matching names to `not_bot_names` |
 
 ---
 
 ## About RCON
 
-Most features work without RCON, but these depend on it:
+Most features do not require RCON, but the following do:
 
-- TPS / MSPT readings (via `tick query`)
-- Coordinates and dimension in the player roster
-- Seeing command reply text — only the RCON channel returns it
+- TPS / MSPT readings (through `tick query`)
+- Coordinates and dimension in the player list
+- Command reply text when the console is switched to the RCON channel
 - Recovering the online-player list after a plugin reload
 
-Enabling it requires configuring **both sides** with a matching port and password:
+RCON must be configured on **both sides**, with matching port and password:
 
-- Minecraft side: `enable-rcon`, `rcon.port` and `rcon.password` in `server/server.properties`
-- MCDR side: the `rcon` section of MCDR's `config.yml`
+- Minecraft side: `enable-rcon`, `rcon.port`, and `rcon.password` in `server/server.properties`
+- MCDR side: the `rcon` section in MCDR's `config.yml`
 
-The three Minecraft-side settings can be edited right from the dashboard under **Server Settings → Server settings**; the server must be restarted afterwards. The MCDR side can be edited under **Server Settings → MCDR config**; saving automatically runs `!!MCDR reload config`.
+The three Minecraft-side settings can be edited directly from the **Server configuration** sub-tab on the panel's **Server configuration** page; the server must be restarted afterwards. The MCDR-side settings can be edited from the **MCDR configuration** sub-tab on the same page; saving automatically runs `!!MCDR reload config`.
 
 ---
 
-## Security notes
+## Security recommendations
 
-The dashboard has full control over your server — arbitrary commands, bans, config changes, plugin/mod management and file edits — so expose it carefully:
+The panel has full control over the server (executing arbitrary commands, banning players, changing configuration, managing / deleting plugins and mods, and editing configuration files), so expose it carefully:
 
-- It **listens on `127.0.0.1` by default**. Keeping that and connecting through an SSH tunnel is the safest way to reach it remotely
-- If you must expose it publicly, put it behind a reverse proxy such as Nginx or Caddy with HTTPS enabled. The plugin **does not provide TLS**; over plain HTTP your password and token travel in the clear
-- The login endpoint has a simple failure throttle (10 attempts per 60 seconds per source) and the interactive API docs are disabled by default; the session cookie is `HttpOnly` with `SameSite=Strict`, so page scripts cannot read the token
-- A reverse proxy must forward WebSocket upgrades, otherwise the live console cannot connect:
+- It **listens on `127.0.0.1` by default**. When remote access is needed, keeping this setting and using an SSH tunnel is recommended
+- If it must be exposed to the public internet, put it behind a reverse proxy such as Nginx or Caddy and enable HTTPS. The plugin **does not provide TLS**; with plain HTTP, passwords and tokens are exposed in transit
+- The login endpoint has simple failure throttling (at most 10 attempts per source within 60 seconds), and the panel's API documentation is disabled by default. Session cookies use `HttpOnly` and `SameSite=Strict`, so page scripts cannot read the token
+- A reverse proxy must forward WebSocket connections, otherwise the live console cannot connect:
 
   ```nginx
   location /ws/ {
@@ -176,25 +187,25 @@ The dashboard has full control over your server — arbitrary commands, bans, co
   }
   ```
 
-- Sensitive settings such as `rcon.password` are shown blank and never sent to the browser; submitting an empty value leaves them unchanged
-- The MCDR config editor renders fields individually and never echoes the RCON password; submitting an empty password field keeps the current value
+- Sensitive settings such as `rcon.password` are shown as blank in the panel and are never sent to the browser; submitting an empty value leaves the original value unchanged
+- The MCDR configuration editor displays fields individually and never echoes the RCON password; submitting an empty value leaves the original value unchanged
 
 ---
 
 ## Known limitations
 
-- **Resource history is kept in memory**, so it resets to empty whenever MCDR restarts or the plugin is reloaded
-- **World seed, name and difficulty are read from save files**, which only update when the server writes them to disk — they can lag reality by minutes
-- **Player IPs and UUIDs are parsed from server output**, so unusual log formats may prevent capture. Players recovered after a plugin reload have no join time or IP
-- **Only Fabric mods are identified** (via `fabric.mod.json`); Forge / NeoForge mods are listed by filename only. Upload, enable/disable and delete operate on `.jar` files and do not depend on the loader
-- **MCDR config is edited as visual fields** and rewritten by ruamel.yaml on save; the field set is detected from the running MCDR version, and unknown keys from newer versions appear as generic inputs
-- **Plugin check updates / updates require network access to the MCDR plugin catalogue**, and only packed plugins (`.mcdr` / `.pyz`) can be updated; detailed output appears in the live console. The panel checks itself each time it opens; if a new version is available, confirm the sidebar-footer prompt to run `!!MCDR plugin install -U minecraft_web_manager` and reload automatically. The panel itself CAN also be reloaded from the panel — it briefly goes offline and comes back automatically
-- **Bot detection**: classic Carpet bots are matched by their offline UUID. TIS/AMS/RMS-style extensions may give bots Mojang-resolved or random v4 UUIDs, which only name rules + usercache signals can catch. Name rules only apply to players with no usercache record; use `not_bot_names` or the per-row "unmark" action to force a real-player classification
-- **Ping is unavailable on vanilla servers** and therefore not shown
-- The dashboard UI currently supports Simplified Chinese and English
+- **Resource usage history is kept in memory**, so it is cleared when MCDR restarts or the plugin reloads and then starts accumulating again
+- **World seed, name, and difficulty are read from save files**, which are updated only when the server saves; values may lag behind the actual state by several minutes
+- **Player IPs and UUIDs are obtained by parsing server output**. Unusual server log formats may prevent capture; players recovered after a plugin reload have no join time or IP
+- **The mod list only identifies Fabric mods** by reading `fabric.mod.json`; Forge / NeoForge mods are listed by filename only. Upload, disable, and delete operations manage `.jar` files without distinguishing loaders
+- **MCDR configuration is edited as visual fields** and rewritten by ruamel.yaml on save; the set of configuration fields is detected from the MCDR version, and unknown fields added by newer versions are shown with generic inputs
+- **Plugin update checks and updates require network access to the MCDR plugin catalogue**, and only packed plugins (`.mcdr` / `.pyz`) can be updated. Detailed check and update output appears in the live console. The panel checks itself each time it opens; when an update is available, it can be confirmed from the sidebar footer to run `!!MCDR plugin install -U minecraft_web_manager` and reload automatically. The panel itself can also be reloaded from the panel, briefly going offline and recovering automatically
+- **Bot detection**: classic Carpet bots are identified precisely by offline UUID. TIS/AMS/RMS-style extensions may use Mojang-resolved or random v4 UUIDs for bots, so detection can only rely on name rules and usercache signals. Name rules apply only to players without a usercache record by default; use `not_bot_names` or the inline “unmark” action to correct a false positive
+- **Ping is unavailable on vanilla servers** and is not displayed in the list
+- The panel currently supports Simplified Chinese and English
 
 ---
 
 ## Feedback
 
-Issues and suggestions are welcome at [Issues](https://github.com/ForestTrees/MinecraftWebManager/issues).
+Issues and suggestions are welcome via [Issues](https://github.com/ForestTrees/MinecraftWebManager/issues).
