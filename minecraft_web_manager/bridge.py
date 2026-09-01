@@ -41,6 +41,14 @@ _PLUGIN_INTERNAL_CONFIG_FILES = {"pending_properties.json"}
 _CHECK_UPDATE_TIMEOUT = 120.0
 _PIM_POLL_INTERVAL = 0.25
 
+# ``help`` is emitted as a burst of individual server lines. The quiet period
+# ends one snapshot after the last line, while the hard limit protects the
+# capture from a noisy or broken server output stream.
+_HELP_CAPTURE_QUIET_SECONDS = 1.0
+_HELP_CAPTURE_MAX_SECONDS = 15.0
+_HELP_REFRESH_RETRIES = 3
+_HELP_REFRESH_RETRY_DELAY = 1.0
+
 # Best-effort detection of MCDR plugin-installer outcome from its plain-text output.
 # MCDR itself is bilingual (en/zh), so both languages are matched. ``success`` /
 # ``noop`` markers only count when no failure marker is present; if the operation
@@ -208,10 +216,15 @@ class MCDRBridge:
         self._instant_keys: set[str] = set()
         self._instant_lock = threading.Lock()
         self._help_index = HelpSuggestionIndex()
+        self._help_refresh_lock = threading.Lock()
+        self._help_refresh_shutdown = threading.Event()
         self._help_capture_lock = threading.RLock()
         self._help_capture_lines: list[str] = []
         self._help_capture_active = False
-        self._help_capture_timer: threading.Timer | None = None
+        self._help_capture_quiet_timer: threading.Timer | None = None
+        self._help_capture_deadline_timer: threading.Timer | None = None
+        self._help_capture_done = threading.Event()
+        self._help_capture_success = False
 
     def call(self, operation: Callable[[], Any], timeout: float = 5.0) -> Any:
         """Run an operation on MCDR's TaskExecutor and wait from the web thread."""
@@ -280,26 +293,69 @@ class MCDRBridge:
         return self.call(suggest, timeout=5.0)
 
     def refresh_server_help(self) -> bool:
-        """Ask the running server for help and replace the parsed index shortly after."""
-        def request() -> bool:
-            if not self.server.is_server_running():
-                return False
-            self._begin_help_capture()
-            self.server.execute("help")
-            return True
+        """Refresh the server/mod command index after the server is ready.
 
-        return bool(self.call(request, timeout=5.0))
+        Only one refresh may own the shared output capture at a time. Waiting
+        for the capture to finish also means callers can distinguish a command
+        that was merely accepted from a snapshot that was actually indexed.
+        """
+        if self._help_refresh_shutdown.is_set() or not self._help_refresh_lock.acquire(False):
+            return False
+        try:
+            for attempt in range(_HELP_REFRESH_RETRIES):
+                if self._help_refresh_shutdown.is_set():
+                    return False
+
+                def request() -> bool:
+                    # ``is_server_running`` becomes true before MCDR detects
+                    # the server's startup-complete line. Sending help earlier
+                    # can race command registration and produce incomplete or
+                    # delayed output, so require the stronger readiness flag.
+                    if (
+                        self._help_refresh_shutdown.is_set()
+                        or not self.server.is_server_running()
+                        or not self.server.is_server_startup()
+                    ):
+                        return False
+                    self._begin_help_capture()
+                    try:
+                        if self._help_refresh_shutdown.is_set():
+                            self._abort_help_capture()
+                            return False
+                        self.server.execute("help")
+                    except Exception:
+                        self._abort_help_capture()
+                        raise
+                    return True
+
+                if self.call(request, timeout=5.0):
+                    self._help_capture_done.wait(_HELP_CAPTURE_MAX_SECONDS + _HELP_CAPTURE_QUIET_SECONDS + 1.0)
+                    with self._help_capture_lock:
+                        if self._help_capture_success:
+                            return True
+
+                if attempt + 1 < _HELP_REFRESH_RETRIES:
+                    self._help_refresh_shutdown.wait(_HELP_REFRESH_RETRY_DELAY)
+            return False
+        finally:
+            self._help_refresh_lock.release()
 
     def _begin_help_capture(self) -> None:
         with self._help_capture_lock:
-            if self._help_capture_timer is not None:
-                self._help_capture_timer.cancel()
+            self._cancel_help_capture_timers()
             self._help_capture_lines = []
             self._help_capture_active = True
-            # ``help`` is emitted as many individual lines. Keep one daemon
-            # timer for the whole snapshot instead of creating one thread per
-            # line; normal server output completes well within this window.
-            self._arm_help_capture_timer(2.0)
+            self._help_capture_success = False
+            self._help_capture_done.clear()
+            self._arm_help_capture_quiet_timer()
+            deadline_timer = threading.Timer(
+                _HELP_CAPTURE_MAX_SECONDS,
+                self._finish_help_capture,
+                kwargs={"complete": False},
+            )
+            deadline_timer.daemon = True
+            self._help_capture_deadline_timer = deadline_timer
+            deadline_timer.start()
 
     def record_help_line(self, content: str) -> bool:
         """Capture an internal help line and report whether web output should hide it."""
@@ -309,31 +365,57 @@ class MCDRBridge:
             if not self._help_capture_active:
                 return False
             self._help_capture_lines.append(content)
+            # Keep the capture alive while help lines are still arriving. This
+            # handles large modded command lists and TaskExecutor backlogs.
+            self._arm_help_capture_quiet_timer()
             return True
 
-    def _arm_help_capture_timer(self, delay: float) -> None:
-        timer = threading.Timer(delay, self._finish_help_capture)
+    def _arm_help_capture_quiet_timer(self) -> None:
+        if self._help_capture_quiet_timer is not None:
+            self._help_capture_quiet_timer.cancel()
+        timer = threading.Timer(_HELP_CAPTURE_QUIET_SECONDS, self._finish_help_capture)
         timer.daemon = True
-        self._help_capture_timer = timer
+        self._help_capture_quiet_timer = timer
         timer.start()
 
-    def _finish_help_capture(self) -> None:
+    def _cancel_help_capture_timers(self) -> None:
+        for timer in (self._help_capture_quiet_timer, self._help_capture_deadline_timer):
+            if timer is not None:
+                timer.cancel()
+        self._help_capture_quiet_timer = None
+        self._help_capture_deadline_timer = None
+
+    def _finish_help_capture(self, complete: bool = True) -> None:
         with self._help_capture_lock:
             if not self._help_capture_active:
                 return
             lines = list(self._help_capture_lines)
             self._help_capture_active = False
-            self._help_capture_timer = None
-        if lines:
+            self._cancel_help_capture_timers()
+            self._help_capture_success = complete and bool(lines)
+        if complete and lines:
             self._help_index.replace(lines)
+        self._help_capture_done.set()
+
+    def _abort_help_capture(self) -> None:
+        with self._help_capture_lock:
+            self._cancel_help_capture_timers()
+            self._help_capture_active = False
+            self._help_capture_success = False
+            self._help_capture_done.set()
 
     def stop_help_capture(self) -> None:
         """Cancel a pending help snapshot during plugin unload/reload."""
         with self._help_capture_lock:
-            if self._help_capture_timer is not None:
-                self._help_capture_timer.cancel()
-                self._help_capture_timer = None
+            self._cancel_help_capture_timers()
             self._help_capture_active = False
+            self._help_capture_success = False
+            self._help_capture_done.set()
+
+    def shutdown_help_refresh(self) -> None:
+        """Stop refresh retries when this plugin module is being unloaded."""
+        self._help_refresh_shutdown.set()
+        self.stop_help_capture()
 
     def clear_server_help(self) -> None:
         """Discard commands from a stopped server until the next startup snapshot."""
@@ -838,7 +920,10 @@ class MCDRBridge:
                 on_console_line(line)
 
         result = self._plugin_command(command, collect)
-        self._wait_for_pim_operation("check_update")
+        completed = self._wait_for_pim_operation(
+            "check_update",
+            lambda: self._has_check_result(collected, collect_lock),
+        )
         time.sleep(0.2)  # drain any final replies queued right after the thread ends
         with collect_lock:
             lines = list(collected)
@@ -852,7 +937,8 @@ class MCDRBridge:
             # A rejected check (another PIM operation running, bad id, dependency
             # resolution failure, ...) must NOT be reported as "all up to date".
             "failed": failed,
-            "success": not failed and _PIM_CHECK_SUCCESS_MARKER.search(text) is not None,
+            "completed": completed,
+            "success": completed and not failed and _PIM_CHECK_SUCCESS_MARKER.search(text) is not None,
         }
 
     def self_plugin_check_update(
@@ -865,36 +951,73 @@ class MCDRBridge:
             **self.plugin_check_update(plugin_id, on_console_line),
         }
 
-    def _wait_for_pim_operation(self, operation_key: str) -> bool:
+    @staticmethod
+    def _has_check_result(collected: list[str], collect_lock: threading.Lock) -> bool:
+        with collect_lock:
+            text = "\n".join(collected)
+        return (
+            _PIM_FAILURE_MARKER.search(text) is not None
+            or _PIM_CHECK_SUCCESS_MARKER.search(text) is not None
+        )
+
+    @staticmethod
+    def _has_install_result(collected: list[str], collect_lock: threading.Lock) -> bool:
+        with collect_lock:
+            text = "\n".join(collected)
+        return (
+            _PIM_FAILURE_MARKER.search(text) is not None
+            or _PIM_INSTALL_SUCCESS_MARKER.search(text) is not None
+            or _PIM_INSTALL_NOOP_MARKER.search(text) is not None
+        )
+
+    def _wait_for_pim_operation(
+        self, operation_key: str, completion_predicate: Callable[[], bool] | None = None
+    ) -> bool:
         """Wait for MCDR's plugin installer operation (e.g. checkupdate) to finish.
 
         Returns ``True`` if the operation finished within the deadline, ``False``
         if it was still running when the deadline passed (frontend reports timeout).
+
+        The command handler starts PIM work asynchronously. In particular, the
+        operation holder can still look idle for a short period after the command
+        has been accepted. Do not treat that initial idle state as completion: wait
+        until this operation is observed running, then wait for it to return to idle.
+        A completion predicate covers rejected or very fast operations that produce
+        their final reply before the worker state becomes observable.
         """
         deadline = time.time() + _CHECK_UPDATE_TIMEOUT
+        started = False
         while time.time() < deadline:
-            if self.call(lambda: self._pim_operation_finished(operation_key)):
+            state = self.call(lambda: self._pim_operation_state(operation_key))
+            if state == "running":
+                started = True
+            elif started or state == "rejected":
+                return True
+            elif completion_predicate is not None and completion_predicate():
                 return True
             time.sleep(_PIM_POLL_INTERVAL)
         return False
 
-    def _pim_operation_finished(self, operation_key: str) -> bool:
+    def _pim_operation_state(self, operation_key: str) -> str:
         mcdr_plugin = self.server.get_plugin_instance(core_constant.PACKAGE_NAME)
         if mcdr_plugin is None:
-            return True
+            return "unavailable"
         for sub_command in getattr(mcdr_plugin, "main_sub_commands", []) or []:
             pim_ext = getattr(sub_command, "pim_ext", None)
             if pim_ext is None:
                 continue
             operation = getattr(pim_ext, "current_operation", None)
             if operation is None:
-                return True
-            # A checkupdate that was rejected (e.g. another PIM operation is running)
-            # never starts a thread of its own, so there is nothing to wait for.
-            if operation.thread is None or operation.op_key != operation_key:
-                return True
-            return False
-        return True
+                return "unavailable"
+            if operation.thread is not None and operation.op_key == operation_key:
+                return "running"
+            if operation.thread is not None or operation.op_key is not None:
+                # A different active operation means this request was rejected;
+                # the command reply contains the exact reason and is collected by
+                # the caller's completion predicate.
+                return "rejected"
+            return "idle"
+        return "unavailable"
 
     @staticmethod
     def _parse_plugin_updates(lines: list[str]) -> list[dict[str, str]]:
@@ -963,7 +1086,10 @@ class MCDRBridge:
                 on_console_line(line)
 
         result = self._plugin_command(command, collect)
-        finished = self._wait_for_pim_operation("install")
+        finished = self._wait_for_pim_operation(
+            "install",
+            lambda: self._has_install_result(collected, collect_lock),
+        )
         time.sleep(0.2)
         with collect_lock:
             lines = list(collected)

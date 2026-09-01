@@ -18,7 +18,7 @@ from .web import WebService
 
 PLUGIN_METADATA = {
     "id": "minecraft_web_manager",
-    "version": "1.2.3",
+    "version": "1.2.4",
     "name": "Minecraft Web Manager",
     "dependencies": {"mcdreforged": ">=2.15.0"},
 }
@@ -40,7 +40,10 @@ def on_load(server, prev_module) -> None:
         if hasattr(prev_module, "uninstall_console_capture"):
             prev_module.uninstall_console_capture()
         if getattr(prev_module, "_bridge", None) is not None:
-            prev_module._bridge.stop_help_capture()
+            if hasattr(prev_module._bridge, "shutdown_help_refresh"):
+                prev_module._bridge.shutdown_help_refresh()
+            else:
+                prev_module._bridge.stop_help_capture()
         if getattr(prev_module, "_service", None) is not None:
             prev_module._service.stop()
         if getattr(prev_module, "_history", None) is not None:
@@ -84,7 +87,12 @@ def on_load(server, prev_module) -> None:
         raise
     server.logger.info("Minecraft Web Manager is listening on http://%s:%s", config.data["host"], config.data["port"])
     _seed_online_players(server)
-    _refresh_server_help_async()
+    # During a full MCDR restart the plugin is loaded before the Minecraft
+    # server reaches its startup-complete state. The SERVER_STARTUP callback
+    # below performs the first refresh; only refresh immediately when this is a
+    # plugin reload into an already-ready server.
+    if server.is_server_startup():
+        _refresh_server_help_async()
 
 
 def _refresh_server_help_async() -> None:
@@ -95,7 +103,9 @@ def _refresh_server_help_async() -> None:
 
     def refresh() -> None:
         try:
-            bridge.refresh_server_help()
+            if not bridge.refresh_server_help():
+                if _service is not None:
+                    _service.logger.debug("Server command suggestions were not refreshed after retries")
         except Exception as error:
             # Help is an enhancement; a server that is still starting or has no
             # compatible handler must not make the web panel fail to load.
@@ -133,7 +143,10 @@ def _seed_online_players(server) -> None:
 def on_unload(server) -> None:
     global _service, _history, _bridge
     if _bridge is not None:
-        _bridge.stop_help_capture()
+        if hasattr(_bridge, "shutdown_help_refresh"):
+            _bridge.shutdown_help_refresh()
+        else:
+            _bridge.stop_help_capture()
     uninstall_console_capture()
     if _service is not None:
         _service.stop()

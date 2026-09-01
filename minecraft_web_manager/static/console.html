@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>__MWM_PANEL_TITLE__</title>
     <meta name="mwm-panel-title" content="__MWM_PANEL_TITLE__" />
-    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=47" />
-    <link rel="stylesheet" href="/assets/style.css?v=47" />
-    <script src="/assets/theme.js?v=47"></script>
-    <script src="/assets/i18n.js?v=47"></script>
+    <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg?v=51" />
+    <link rel="stylesheet" href="/assets/style.css?v=51" />
+    <script src="/assets/theme.js?v=51"></script>
+    <script src="/assets/i18n.js?v=51"></script>
   </head>
   <body>
     <div class="app">
@@ -132,11 +132,19 @@
             <div class="panel">
               <div class="panel-head">
                 <h2 data-i18n="players_title">玩家管理</h2>
+              </div>
+
+              <div class="manage-toolbar">
                 <div class="subtabs" id="player-subtabs" role="group">
                   <button type="button" class="active" data-subtab="roster" data-i18n="sub_roster">玩家列表</button>
                   <button type="button" data-subtab="whitelist" data-i18n="sub_whitelist">白名单</button>
                   <button type="button" data-subtab="ops" data-i18n="sub_ops">管理员</button>
                   <button type="button" data-subtab="bans" data-i18n="sub_bans">封禁</button>
+                </div>
+                <div class="subview-head" data-player-toolbar="whitelist" hidden>
+                  <div class="inline-actions">
+                    <button class="btn ghost sm" data-access-action="whitelist_reload" type="button" data-i18n="reload_list">重载名单</button>
+                  </div>
                 </div>
               </div>
 
@@ -177,7 +185,6 @@
                       <div class="toggle-hint" id="whitelist-hint" data-i18n="whitelist_hint_default">开启后仅名单内玩家可进入服务器</div>
                     </div>
                   </div>
-                  <button class="btn ghost sm" data-access-action="whitelist_reload" type="button" data-i18n="reload_list">重载名单</button>
                 </div>
                 <form class="inline-form" data-add-form="whitelist_add">
                   <input class="field" name="target" data-i18n-placeholder="player_name_placeholder" placeholder="玩家名，例如 Steve" autocomplete="off" />
@@ -269,17 +276,17 @@
 
           <!-- World -->
           <section class="view" data-view-panel="world">
-            <div class="world-toolbar">
-              <div class="subtabs" id="world-subtabs" role="group">
-                <button type="button" class="active" data-world-subtab="properties"><span data-i18n="world_sub_server">服务器配置</span></button>
-                <button type="button" data-world-subtab="mcdr"><span data-i18n="world_sub_mcdr">MCDR 配置</span></button>
+            <div class="panel">
+              <div class="panel-head">
+                <h2 data-i18n="world_title">服务器配置</h2>
               </div>
-            </div>
 
-            <div class="subview active" data-world-subview="properties">
-              <div class="panel">
-                <div class="panel-head world-panel-head">
-                  <h2 data-i18n="world_title">服务器配置</h2>
+              <div class="manage-toolbar world-manage-toolbar">
+                <div class="subtabs" id="world-subtabs" role="group">
+                  <button type="button" class="active" data-world-subtab="properties"><span data-i18n="world_sub_server">服务器配置</span></button>
+                  <button type="button" data-world-subtab="mcdr"><span data-i18n="world_sub_mcdr">MCDR 配置</span></button>
+                </div>
+                <div class="subview-head" data-world-toolbar="properties">
                   <div class="inline-actions">
                     <span class="hint mono" id="properties-path">server.properties</span>
                     <input id="properties-filter" class="field sm-field" data-i18n-placeholder="filter_ph" placeholder="筛选配置项…" autocomplete="off" />
@@ -287,15 +294,7 @@
                     <button id="properties-save" class="btn sm" type="button" disabled data-i18n="save_changes">保存修改</button>
                   </div>
                 </div>
-                <p class="hint" data-i18n="properties_hint">修改后需<strong>重启服务端</strong>才会生效；密码类配置留空表示保持不变。</p>
-                <div id="properties-list" class="properties-grid" data-i18n="loading">正在读取…</div>
-              </div>
-            </div>
-
-            <div class="subview" data-world-subview="mcdr">
-              <div class="panel">
-                <div class="panel-head world-panel-head mcdr-panel-head">
-                  <h2 data-i18n="mcdr_config_title">MCDR 配置</h2>
+                <div class="subview-head" data-world-toolbar="mcdr" hidden>
                   <div class="inline-actions">
                     <span class="hint mono" id="mcdr-config-path"></span>
                     <input id="mcdr-config-filter" class="field sm-field" data-i18n-placeholder="filter_ph" placeholder="筛选配置项…" autocomplete="off" />
@@ -304,6 +303,14 @@
                     <button id="mcdr-config-save" class="btn sm" type="button" disabled data-i18n="mod_config_save">保存配置</button>
                   </div>
                 </div>
+              </div>
+
+              <div class="subview active" data-world-subview="properties">
+                <p class="hint" data-i18n="properties_hint">修改后需<strong>重启服务端</strong>才会生效；密码类配置留空表示保持不变。</p>
+                <div id="properties-list" class="properties-grid" data-i18n="loading">正在读取…</div>
+              </div>
+
+              <div class="subview" data-world-subview="mcdr">
                 <p class="hint" data-i18n="mcdr_config_hint">以可视化卡片修改 MCDR 的 config.yml；保存后会自动执行 <strong>!!MCDR reload config</strong> 生效。RCON 密码留空表示保持不变。</p>
                 <div id="mcdr-config-list" class="mcdr-config-list" data-i18n="loading">正在读取…</div>
               </div>
@@ -400,7 +407,7 @@
       </div>
     </div>
 
-    <script src="/assets/chart.js?v=47"></script>
-    <script src="/assets/console.js?v=47"></script>
+    <script src="/assets/chart.js?v=51"></script>
+    <script src="/assets/console.js?v=51"></script>
   </body>
 </html>

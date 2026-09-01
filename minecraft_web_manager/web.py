@@ -276,7 +276,7 @@ class WebService:
     def _build_app(self) -> FastAPI:
         # Interactive API docs are disabled: they were publicly reachable without
         # authentication and reveal the whole command surface of the panel.
-        app = FastAPI(title="Minecraft Web Manager", version="1.2.3", docs_url=None, openapi_url=None, redoc_url=None)
+        app = FastAPI(title="Minecraft Web Manager", version="1.2.4", docs_url=None, openapi_url=None, redoc_url=None)
 
         @app.middleware("http")
         async def renew_session(request: Request, call_next):
@@ -512,11 +512,17 @@ class WebService:
             )
             return {
                 "plugin_id": result["plugin_id"],
-                "available": update is not None and not result.get("failed", False),
+                "available": (
+                    update is not None
+                    and result.get("completed", False)
+                    and result.get("success", False)
+                    and not result.get("failed", False)
+                ),
                 "current": update.get("current") if update else None,
                 "latest": update.get("latest") if update else None,
                 "failed": result.get("failed", False),
-                "completed": result.get("success", False),
+                "completed": result.get("completed", False),
+                "success": result.get("success", False),
             }
 
         @app.post("/api/plugins/self_update")

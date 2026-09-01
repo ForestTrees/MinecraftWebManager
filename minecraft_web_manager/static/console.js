@@ -1133,6 +1133,9 @@ function setWorldSubtab(subtab) {
   document.querySelectorAll('[data-world-subview]').forEach((panel) => {
     panel.classList.toggle('active', panel.dataset.worldSubview === subtab);
   });
+  document.querySelectorAll('[data-world-toolbar]').forEach((panel) => {
+    panel.hidden = panel.dataset.worldToolbar !== subtab;
+  });
   if (subtab === 'properties') refreshProperties();
   else if (subtab === 'mcdr') refreshMcdrConfig();
 }
@@ -1270,8 +1273,19 @@ async function refreshPlugins() {
   }
 }
 
+function pluginCheckConfirmed(result) {
+  return !!result && !result.failed && result.completed === true && result.success === true;
+}
+
+function showPluginCheckFailure(result) {
+  showToast(
+    T(result && result.failed ? 'plugin_check_failed_hint' : 'plugin_check_unconfirmed'),
+    { type: 'error' },
+  );
+}
+
 function applyPluginCheckResult(result) {
-  if (result.failed) return; // a rejected/failed check must not mark plugins "up to date"
+  if (!pluginCheckConfirmed(result)) return; // never apply a partial result
   for (const update of result.updates || []) {
     if (update && update.plugin_id) {
       state.pluginUpdates[update.plugin_id] = { current: update.current, latest: update.latest };
@@ -1288,8 +1302,8 @@ function applyPluginCheckResult(result) {
 }
 
 function showPluginCheckToast(result) {
-  if (result.failed) {
-    showToast(T('plugin_check_failed_hint'), { type: 'error' });
+  if (!pluginCheckConfirmed(result)) {
+    showPluginCheckFailure(result);
     return;
   }
   const updates = result.updates || [];
@@ -1627,8 +1641,8 @@ document.addEventListener('click', async (event) => {
     try {
       const result = await api(endpoint, { method: 'POST', body: JSON.stringify({}) });
       if (action === 'check_all') {
-        if (result.failed) {
-          showToast(T('plugin_check_failed_hint'), { type: 'error' });
+        if (!pluginCheckConfirmed(result)) {
+          showPluginCheckFailure(result);
         } else {
           applyPluginCheckResult(result);
           showPluginCheckToast(result);
@@ -1660,8 +1674,8 @@ document.addEventListener('click', async (event) => {
     setManageBusy(true);
     try {
       const result = await api('/api/plugins/check_update', { method: 'POST', body: JSON.stringify({ plugin_id: pluginId }) });
-      if (result.failed) {
-        showToast(T('plugin_check_failed_hint'), { type: 'error' });
+      if (!pluginCheckConfirmed(result)) {
+        showPluginCheckFailure(result);
       } else {
         applyPluginCheckResult(result);
         showPluginCheckToast(result);
@@ -1926,6 +1940,9 @@ if ($('config-modal')) {
 document.querySelectorAll('#player-subtabs button').forEach((button) => button.addEventListener('click', () => {
   document.querySelectorAll('#player-subtabs button').forEach((el) => el.classList.toggle('active', el === button));
   document.querySelectorAll('[data-subview]').forEach((el) => el.classList.toggle('active', el.dataset.subview === button.dataset.subtab));
+  document.querySelectorAll('[data-player-toolbar]').forEach((el) => {
+    el.hidden = el.dataset.playerToolbar !== button.dataset.subtab;
+  });
 }));
 
 // Seed / level name live in the overview strip, so this refreshes with the overview
