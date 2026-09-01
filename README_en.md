@@ -6,7 +6,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that provi
 
 The panel is hosted by the plugin itself. No separate web server, CDN, or frontend build tool is required.
 
-- **Version**: 1.2.3
+- **Version**: 1.2.4
 - **Dependencies**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`, `ruamel-yaml`
 
@@ -26,8 +26,8 @@ The panel is hosted by the plugin itself. No separate web server, CDN, or fronte
 
 ### Player management
 
-- **Player list**: aggregates every player who has joined the server, showing online state, IP, session duration, last seen time, dimension, position, UUID, and other information
-- **Bot list**: detected Carpet fake players (bots) are shown in a collapsible list and can be manually marked or unmarked inline
+- **Player list**: aggregates every player who has joined the server, showing online state, IP, session duration, last seen time, dimension, and position; click a player name to copy its UUID
+- **Bot list**: detected Carpet fake players (bots) are shown in a collapsible list and can be manually marked or unmarked inline; bot names can also be clicked to copy their UUIDs
 - **Per-player actions**: grant / revoke OP, kick, ban, ban IP, add to / remove from the whitelist
 - **Whitelist**: toggle the whitelist, reload it, and add or remove members
 - **Operators**: view and add or remove OPs
@@ -54,7 +54,7 @@ The panel is hosted by the plugin itself. No separate web server, CDN, or fronte
 
 ### Server configuration
 
-The top of the server configuration page switches between the **Server configuration** and **MCDR configuration** sub-tabs.
+The top of the server configuration page switches between the **Server configuration** and **MCDR configuration** sub-tabs. Both sub-tabs share the same heading, toolbar, and right-aligned action area, while filter fields adapt to the available width.
 
 - **Server configuration**: view and edit `server.properties` online; changes take effect after the server is restarted
 - **MCDR configuration**: view and edit MCDR's `config.yml` online; saving automatically runs `!!MCDR reload config` so changes take effect immediately
