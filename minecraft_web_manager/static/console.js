@@ -549,6 +549,30 @@ function botSourceHint(p) {
   return p.bot_source === 'manual' ? T('bot_source_manual') : (p.bot_source === 'pattern' ? T('bot_source_pattern') : T('bot_source_uuid'));
 }
 
+async function copyPlayerUuid(uuid) {
+  if (!uuid) return;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(uuid);
+    } else {
+      const textarea = document.createElement('textarea');
+      textarea.value = uuid;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const copied = document.execCommand('copy');
+      textarea.remove();
+      if (!copied) throw new Error('Clipboard copy was rejected');
+    }
+    showToast(T('uuid_copied'));
+  } catch (error) {
+    console.warn(error);
+    showToast(T('uuid_copy_failed'), { type: 'error' });
+  }
+}
+
 function rosterRowHtml(p, isBot) {
   const marks = [];
   if (p.whitelisted) marks.push(`<span class="tag muted">${T('tag_whitelisted')}</span>`);
@@ -558,28 +582,34 @@ function rosterRowHtml(p, isBot) {
   const onlineDuration = p.joined_at ? formatDuration(p.online_seconds) : `<span class="na" title="${T('title_join_unknown')}">${T('online_recovered')}</span>`;
   const lastSeen = p.online ? `<span class="tag">${T('status_online')}</span>` : (p.last_seen ? formatDateTime(p.last_seen) : `<span class="na">${T('unknown')}</span>`);
   // The bot table shows the detection source as a hover hint instead of a tags column.
-  const nameTitle = isBot && p.bot_source ? ` title="${escapeHtml(botSourceHint(p))}"` : '';
-  const playerCell = `<td>${p.op ? '<span class="tag op">OP</span> ' : ''}<span class="player-name"${nameTitle}>${escapeHtml(p.name || T('unknown_name'))}</span></td>`;
+  const titleParts = [];
+  if (isBot && p.bot_source) titleParts.push(botSourceHint(p));
+  if (p.uuid) titleParts.push(T('copy_uuid_hint'));
+  const nameTitle = titleParts.length ? ` title="${escapeHtml(titleParts.join(' · '))}"` : '';
+  const playerName = escapeHtml(p.name || T('unknown_name'));
+  const playerNameHtml = p.uuid
+    ? `<button type="button" class="player-name player-copy-uuid" data-copy-uuid="${escapeHtml(p.uuid)}"${nameTitle}>${playerName}</button>`
+    : `<span class="player-name"${nameTitle}>${playerName}</span>`;
+  const playerCell = `<td>${p.op ? '<span class="tag op">OP</span> ' : ''}${playerNameHtml}</td>`;
   const statusCell = `<td>${p.online ? `<span class="tag">${T('status_online')}</span>` : `<span class="tag muted">${T('status_offline')}</span>`}</td>`;
   const sessionCell = `<td>${p.online ? onlineDuration : '--'}</td>`;
   const lastSeenCell = `<td>${lastSeen}</td>`;
   const dimensionCell = `<td>${escapeHtml(p.dimension || '--')}</td>`;
   const positionCell = `<td class="mono">${p.position ? p.position.join(', ') : '--'}</td>`;
-  const uuidCell = `<td class="mono">${escapeHtml(p.uuid || '--')}</td>`;
   const actionsCell = `<td>${rosterActionsHtml(p, isBot)}</td>`;
   if (isBot) {
     // Bot table deliberately omits IP and tags columns.
-    return `<tr>${playerCell}${statusCell}${sessionCell}${lastSeenCell}${dimensionCell}${positionCell}${uuidCell}${actionsCell}</tr>`;
+    return `<tr>${playerCell}${statusCell}${sessionCell}${lastSeenCell}${dimensionCell}${positionCell}${actionsCell}</tr>`;
   }
   const tagsCell = `<td>${marks.join(' ') || '<span class="na">--</span>'}</td>`;
   const ipCell = `<td class="mono">${escapeHtml(p.ip || (p.online ? T('unknown') : '--'))}</td>`;
-  return `<tr>${playerCell}${statusCell}${tagsCell}${ipCell}${sessionCell}${lastSeenCell}${dimensionCell}${positionCell}${uuidCell}${actionsCell}</tr>`;
+  return `<tr>${playerCell}${statusCell}${tagsCell}${ipCell}${sessionCell}${lastSeenCell}${dimensionCell}${positionCell}${actionsCell}</tr>`;
 }
 
 function renderRoster(players) {
   const bots = players.filter((p) => p.is_bot);
   const humans = players.filter((p) => !p.is_bot);
-  const emptyRow = `<tr><td colspan="10">${T('roster_no_players')}</td></tr>`;
+  const emptyRow = `<tr><td colspan="9">${T('roster_no_players')}</td></tr>`;
   if (!players.length) {
     $('players-table-body').innerHTML = emptyRow;
     $('bots-section-head').hidden = true;
@@ -611,7 +641,7 @@ async function refreshRoster(light = false) {
     renderRoster(data.players || []);
     renderAccess(data);
   } catch (error) {
-    $('players-table-body').innerHTML = `<tr><td colspan="10">${escapeHtml(T('load_failed', { error: error.message }))}</td></tr>`;
+    $('players-table-body').innerHTML = `<tr><td colspan="9">${escapeHtml(T('load_failed', { error: error.message }))}</td></tr>`;
     $('bots-section-head').hidden = true;
     $('bots-table-scroll').hidden = true;
     $('players-bots-body').innerHTML = '';
@@ -662,6 +692,11 @@ document.addEventListener('click', (event) => {
   const button = event.target.closest('[data-player-action]');
   if (!button) return;
   performPlayerAction(button.dataset.playerAction, button.dataset.target || null, button.dataset.reason || null);
+});
+document.addEventListener('click', (event) => {
+  const button = event.target.closest('[data-copy-uuid]');
+  if (!button) return;
+  copyPlayerUuid(button.dataset.copyUuid || '');
 });
 document.addEventListener('click', (event) => {
   if (event.target.closest('#bots-toggle')) {
