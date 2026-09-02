@@ -4,7 +4,7 @@
   "name": "Minecraft Web Manager",
   "description": {
     "en_us": "A secure web dashboard and live console for an MCDReforged-managed Minecraft server, with player, plugin, world and mod management.",
-    "zh_cn": "一个 MCDReforged 插件，为 Minecraft 服务器提供带登录鉴权的网页管理面板：实时控制台、玩家管理、插件与 Mod 在线管理、server.properties 与 MCDR config.yml 在线编辑、Mod 配置文件编辑、资源占用图表。"
+    "zh_cn": "为 MCDReforged 管理的 Minecraft 服务器提供安全的网页仪表盘与实时控制台，支持玩家、插件、世界与 Mod 管理。"
   },
   "author": "ForestTrees",
   "entrypoint": "minecraft_web_manager",
