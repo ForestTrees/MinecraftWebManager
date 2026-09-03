@@ -73,6 +73,7 @@ _PIM_INSTALL_NOOP_MARKER = re.compile(r"nothing needs to be installed|无需安�
 _PIM_CHECK_SUCCESS_MARKER = re.compile(
     r"found \d|are up-to-date|no updates found|找到了|均为最新版本", re.IGNORECASE
 )
+_ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
 # Carpet fake players always get the Java offline-mode UUID derived from their name,
 # no matter how the server itself is configured.
@@ -1021,15 +1022,19 @@ class MCDRBridge:
 
     @staticmethod
     def _parse_plugin_updates(lines: list[str]) -> list[dict[str, str]]:
-        """Best-effort parse of ``!!MCDR plugin checkupdate`` plain-text output.
+        """Best-effort parse of ``!!MCDR plugin checkupdate`` output.
 
         Updatable entries are printed like ``  plugin_id 1.0.0 -> 1.1.0``; only those
         lines (not the "not updatable" / "up to date" sections) contain an arrow.
+        MCDR colors the plugin id and versions in console replies, so strip ANSI
+        sequences before parsing rather than allowing an escape sequence to become
+        part of the plugin id or version.
         """
         updates: list[dict[str, str]] = []
-        pattern = re.compile(r"([a-z][a-z0-9_]{0,63})\s+(\S+)\s*->\s*(\S+)")
+        pattern = re.compile(r"^\s*([A-Za-z0-9_.-]{1,64})\s+(\S+)\s*->\s*(\S+)")
         for line in lines:
-            match = pattern.search(line)
+            clean_line = _ANSI_ESCAPE_PATTERN.sub("", line)
+            match = pattern.search(clean_line)
             if match is not None:
                 updates.append(
                     {
