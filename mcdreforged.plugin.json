@@ -1,6 +1,6 @@
 {
   "id": "minecraft_web_manager",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "name": "Minecraft Web Manager",
   "description": {
     "en_us": "A secure web dashboard and live console for an MCDReforged-managed Minecraft server, with player, plugin, world and mod management.",

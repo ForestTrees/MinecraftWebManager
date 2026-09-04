@@ -18,7 +18,7 @@ from .web import WebService
 
 PLUGIN_METADATA = {
     "id": "minecraft_web_manager",
-    "version": "1.2.5",
+    "version": "1.2.6",
     "name": "Minecraft Web Manager",
     "dependencies": {"mcdreforged": ">=2.15.0"},
 }

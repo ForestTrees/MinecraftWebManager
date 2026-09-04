@@ -6,7 +6,7 @@ An [MCDReforged](https://github.com/Fallen-Breath/MCDReforged) plugin that provi
 
 The panel is hosted by the plugin itself. No separate web server, CDN, or frontend build tool is required.
 
-- **Version**: 1.2.5
+- **Version**: 1.2.6
 - **Dependencies**: MCDReforged `>=2.15.0`, Python 3.10+
 - **Python packages**: `fastapi`, `uvicorn[standard]`, `python-multipart`, `psutil`, `ruamel-yaml`
 

@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import psutil
-from mcdreforged.command.command_source import ConsoleCommandSource
+from mcdreforged.command.command_source import PluginCommandSource
 from mcdreforged.constants import core_constant
 from mcdreforged.minecraft.rtext.text import RTextBase
 from ruamel.yaml import YAML
@@ -165,15 +165,15 @@ _POS_PATTERN = re.compile(r"\[\s*(-?[\d.eE]+)d?\s*,\s*(-?[\d.eE]+)d?\s*,\s*(-?[\
 _DIMENSION_PATTERN = re.compile(r'"([^"]+)"')
 
 
-class WebCommandSource(ConsoleCommandSource):
-    """A console command source whose replies are forwarded to the web console.
+class WebCommandSource(PluginCommandSource):
+    """A plugin command source whose replies are forwarded to the web console.
 
     MCDR's default plugin command source prints command replies (e.g. the output of ``!!MCDR status``)
     straight to the MCDR logger, which never reaches ``on_info`` and therefore never reaches the web UI.
     """
 
-    def __init__(self, mcdr_server, info, on_line: Callable[[dict[str, Any]], None]):
-        super().__init__(mcdr_server, info)
+    def __init__(self, server_interface, on_line: Callable[[dict[str, Any]], None]):
+        super().__init__(server_interface)
         self._on_line = on_line
 
     def reply(self, message: Any, **kwargs: Any) -> None:
@@ -728,15 +728,12 @@ class MCDRBridge:
             if transport != "console":
                 raise ValueError("Unsupported command transport")
             if command.startswith("!!"):
-                mcdr_server = self.server._mcdr_server
-                info = mcdr_server.server_handler_manager.get_current_handler().parse_console_command(command)
-                source = WebCommandSource(mcdr_server, info, on_console_line or (lambda _line: None))
-                # Feed the command through MCDR's normal info-reactor pipeline.
-                # Registered MCDR commands are consumed by CommandManager; an
-                # unregistered ``!!`` command continues to the Minecraft server,
-                # matching the behavior of the native MCDR console.
-                info._attach_and_finalize(mcdr_server, command_source=source)
-                mcdr_server.reactor_manager.put_info(info)
+                # Execute through the public command API with our source intact.
+                # InfoReactorManager.put_info() finalizes Info again and replaces
+                # a pre-attached custom source with a plain ConsoleCommandSource;
+                # then PIM replies reach the log but never this request collector.
+                source = WebCommandSource(self.server, on_console_line or (lambda _line: None))
+                self.server.execute_command(command, source=source)
             else:
                 self.server.execute(command)
             return None
@@ -915,8 +912,13 @@ class MCDRBridge:
         collect_lock = threading.Lock()
 
         def collect(line: dict[str, Any]) -> None:
+            # MCDR's PIM replies are RText.  Keep the colored line for the web
+            # console, but use plain text for internal completion/diagnostic
+            # matching.  Otherwise a colored count turns ``Found 1`` into
+            # ``Found \x1b[93m1`` and the request can wait until its timeout.
+            content = _ANSI_ESCAPE_PATTERN.sub("", str(line.get("content") or ""))
             with collect_lock:
-                collected.append(str(line.get("content") or ""))
+                collected.append(content)
             if on_console_line is not None:
                 on_console_line(line)
 
@@ -928,7 +930,7 @@ class MCDRBridge:
         time.sleep(0.2)  # drain any final replies queued right after the thread ends
         with collect_lock:
             lines = list(collected)
-        text = "\n".join(lines)
+        text = _ANSI_ESCAPE_PATTERN.sub("", "\n".join(lines))
         failed = _PIM_FAILURE_MARKER.search(text) is not None
         return {
             **result,
@@ -956,6 +958,7 @@ class MCDRBridge:
     def _has_check_result(collected: list[str], collect_lock: threading.Lock) -> bool:
         with collect_lock:
             text = "\n".join(collected)
+        text = _ANSI_ESCAPE_PATTERN.sub("", text)
         return (
             _PIM_FAILURE_MARKER.search(text) is not None
             or _PIM_CHECK_SUCCESS_MARKER.search(text) is not None
@@ -965,6 +968,7 @@ class MCDRBridge:
     def _has_install_result(collected: list[str], collect_lock: threading.Lock) -> bool:
         with collect_lock:
             text = "\n".join(collected)
+        text = _ANSI_ESCAPE_PATTERN.sub("", text)
         return (
             _PIM_FAILURE_MARKER.search(text) is not None
             or _PIM_INSTALL_SUCCESS_MARKER.search(text) is not None
@@ -989,18 +993,25 @@ class MCDRBridge:
         deadline = time.time() + _CHECK_UPDATE_TIMEOUT
         started = False
         while time.time() < deadline:
+            # The command source receives the terminal result directly. Check it
+            # before consulting MCDR's operation holder: MCDR starts the worker
+            # asynchronously and its holder can briefly retain a running/stale
+            # thread after the reply has already reached this request.
+            if completion_predicate is not None and completion_predicate():
+                return True
             state = self.call(lambda: self._pim_operation_state(operation_key))
-            if state == "running":
+            if state in ("running", "starting"):
                 started = True
             elif started or state == "rejected":
-                return True
-            elif completion_predicate is not None and completion_predicate():
                 return True
             time.sleep(_PIM_POLL_INTERVAL)
         return False
 
     def _pim_operation_state(self, operation_key: str) -> str:
-        mcdr_plugin = self.server.get_plugin_instance(core_constant.PACKAGE_NAME)
+        # ServerInterface.get_plugin_instance() deliberately only returns regular
+        # plugin entrypoint modules. MCDR itself is a BuiltinPlugin, so query the
+        # core plugin manager that owns the PIM operation holder.
+        mcdr_plugin = self.server._mcdr_server.plugin_manager.get_plugin_from_id(core_constant.PACKAGE_NAME)
         if mcdr_plugin is None:
             return "unavailable"
         for sub_command in getattr(mcdr_plugin, "main_sub_commands", []) or []:
@@ -1010,13 +1021,23 @@ class MCDRBridge:
             operation = getattr(pim_ext, "current_operation", None)
             if operation is None:
                 return "unavailable"
-            if operation.thread is not None and operation.op_key == operation_key:
-                return "running"
-            if operation.thread is not None or operation.op_key is not None:
+            thread = operation.thread
+            if thread is not None and thread.is_alive():
+                if operation.op_key == operation_key:
+                    return "running"
+                if operation.op_key is None:
+                    # MCDR assigns op_key immediately after starting the worker.
+                    # A fast worker can be observed during this short window.
+                    return "starting"
                 # A different active operation means this request was rejected;
                 # the command reply contains the exact reason and is collected by
                 # the caller's completion predicate.
                 return "rejected"
+            # MCDR's guard updates ``thread`` / ``op_key`` around ``Thread.start``.
+            # If the operation finishes before those assignments, a dead thread
+            # can remain paired with the old key. It must not be treated as an
+            # operation that is still running, or every check can wait for the
+            # full timeout despite already having printed its result.
             return "idle"
         return "unavailable"
 
@@ -1085,8 +1106,11 @@ class MCDRBridge:
         collect_lock = threading.Lock()
 
         def collect(line: dict[str, Any]) -> None:
+            # See plugin_check_update: classification must not depend on the
+            # terminal color sequences used by MCDR's RText replies.
+            content = _ANSI_ESCAPE_PATTERN.sub("", str(line.get("content") or ""))
             with collect_lock:
-                collected.append(str(line.get("content") or ""))
+                collected.append(content)
             if on_console_line is not None:
                 on_console_line(line)
 
@@ -1098,7 +1122,7 @@ class MCDRBridge:
         time.sleep(0.2)
         with collect_lock:
             lines = list(collected)
-        text = "\n".join(lines)
+        text = _ANSI_ESCAPE_PATTERN.sub("", "\n".join(lines))
         failed = _PIM_FAILURE_MARKER.search(text) is not None
         success = not failed and _PIM_INSTALL_SUCCESS_MARKER.search(text) is not None
         noop = not failed and not success and _PIM_INSTALL_NOOP_MARKER.search(text) is not None
