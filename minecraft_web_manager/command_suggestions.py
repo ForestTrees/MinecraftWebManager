@@ -16,6 +16,11 @@ from dataclasses import dataclass
 _ANSI_ESCAPE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 _HELP_LINE = re.compile(r"^\s*/(?P<body>\S.*)$")
 _ALIAS = re.compile(r"^\s*(?P<alias>\S+)\s+->\s+(?P<target>\S+)(?:\s+.*)?$")
+# Vanilla Minecraft labels server-generated chat on the console, and command
+# feedback is one of them.  On MC 26.3 a usage line arrives as
+#   [Server thread/INFO]: System chat: /advancement (grant|revoke)
+# The label is not part of the usage grammar, so it is dropped before matching.
+_SOURCE_LABEL = re.compile(r"^(?:System chat:[ \t]*)+")
 
 
 @dataclass(frozen=True)
@@ -132,15 +137,26 @@ def _clean_line(content: str) -> str:
     return _ANSI_ESCAPE.sub("", str(content)).replace("\\<", "<").replace("\\>", ">")
 
 
+def _help_body(content: str) -> str:
+    """Return the usage grammar carried by a console line.
+
+    ANSI escapes and a leading chat-source label (see ``_SOURCE_LABEL``) are
+    removed first, so a bare ``/command ...`` line and a labelled
+    ``System chat: /command ...`` line are recognised identically.  A line that
+    holds no command usage yields "" and is ignored by the callers.
+    """
+    return _SOURCE_LABEL.sub("", _clean_line(content).strip())
+
+
 def is_help_line(content: str) -> bool:
-    return bool(_HELP_LINE.match(_clean_line(content).strip()))
+    return bool(_HELP_LINE.match(_help_body(content)))
 
 
 def parse_help_lines(lines: list[str]) -> list[tuple[_Token, ...]]:
     patterns: list[tuple[_Token, ...]] = []
     aliases: list[tuple[str, str]] = []
     for raw_line in lines:
-        match = _HELP_LINE.match(_clean_line(raw_line).strip())
+        match = _HELP_LINE.match(_help_body(raw_line))
         if not match:
             continue
         body = match.group("body")
