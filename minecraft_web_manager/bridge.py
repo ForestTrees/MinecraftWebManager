@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 import psutil
+from mcdreforged.api.types import InfoActionFlag, InfoFilter
 from mcdreforged.command.command_source import PluginCommandSource
 from mcdreforged.constants import core_constant
 from mcdreforged.minecraft.rtext.text import RTextBase
@@ -198,6 +199,32 @@ class WebCommandSource(PluginCommandSource):
             )
 
 
+class HelpSnapshotFilter(InfoFilter):
+    """Keep this plugin's own ``help`` snapshot out of the MCDR console.
+
+    ``refresh_server_help`` asks the server for its whole command list, which the
+    server answers with one console line per command. That snapshot exists only
+    to build the web command suggestion index, so letting ~130 usage lines reach
+    the MCDR console at every startup is pure noise.
+
+    The info is *hidden* rather than discarded, so ``process`` is kept and the
+    snapshot still reaches ``on_info`` for indexing; only the console echo is
+    dropped. Hiding is limited to the window in which a snapshot requested by
+    this plugin is in flight, so a manually issued ``help`` and any other
+    command feedback are unaffected.
+    """
+
+    def __init__(self, bridge: "MCDRBridge"):
+        self._bridge = bridge
+
+    def filter_server_info(self, info) -> None:
+        content = info.content
+        if content is None:
+            return
+        if self._bridge.is_help_snapshot_in_flight() and is_help_line(content):
+            info.action_flag = InfoActionFlag.hidden()
+
+
 class MCDRBridge:
     def __init__(self, server, players: dict[str, dict[str, Any]], config=None):
         self.server = server
@@ -357,6 +384,15 @@ class MCDRBridge:
             deadline_timer.daemon = True
             self._help_capture_deadline_timer = deadline_timer
             deadline_timer.start()
+
+    def is_help_snapshot_in_flight(self) -> bool:
+        """Whether this plugin is currently collecting its own ``help`` snapshot.
+
+        Queried by :class:`HelpSnapshotFilter` on MCDR's main thread, so it only
+        performs a short lock-guarded flag read.
+        """
+        with self._help_capture_lock:
+            return self._help_capture_active
 
     def record_help_line(self, content: str) -> bool:
         """Capture an internal help line and report whether web output should hide it."""

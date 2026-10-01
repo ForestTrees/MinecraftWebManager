@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .bridge import MCDRBridge
+from .bridge import HelpSnapshotFilter, MCDRBridge
 from .config import ConfigStore
 from .console_capture import install as install_console_capture
 from .console_capture import uninstall as uninstall_console_capture
@@ -64,6 +64,10 @@ def on_load(server, prev_module) -> None:
         server.logger.warning("Save it now. To reset it later, clear password.salt and password.hash in the plugin config, then reload.")
     bridge = MCDRBridge(server, _players, config)
     _bridge = bridge
+    # The ``help`` snapshot this plugin requests is only used to build the web
+    # command suggestion index. Hide it from the MCDR console so the startup
+    # snapshot does not print ~130 usage lines there.
+    server.register_info_filter(HelpSnapshotFilter(bridge))
     # Load (or create) the effective-value baseline for tracking saved-but-not-yet
     # effective server.properties changes; survives plugin reloads and MCDR restarts.
     bridge.bootstrap_pending(server.logger)
